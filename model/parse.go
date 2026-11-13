@@ -16,8 +16,8 @@ func ParseINP(text string) *Network {
 	// reset times to zero so unspecified values are not forced to defaults
 	n.Times = Times{Statistic: "NONE"}
 
-	nodeByID := map[string]*Node{}
-	linkByID := map[string]*Link{}
+	nodeByID := map[string]int{}
+	linkByID := map[string]int{}
 	patOrder := []string{}
 	patMap := map[string]*Pattern{}
 	curveOrder := []string{}
@@ -25,14 +25,12 @@ func ParseINP(text string) *Network {
 	pendingCurveType := ""
 
 	addNode := func(nd Node) {
-		cp := nd
-		n.Nodes = append(n.Nodes, cp)
-		nodeByID[nd.ID] = &n.Nodes[len(n.Nodes)-1]
+		n.Nodes = append(n.Nodes, nd)
+		nodeByID[nd.ID] = len(n.Nodes) - 1
 	}
 	addLink := func(lk Link) {
-		cp := lk
-		n.Links = append(n.Links, cp)
-		linkByID[lk.ID] = &n.Links[len(n.Links)-1]
+		n.Links = append(n.Links, lk)
+		linkByID[lk.ID] = len(n.Links) - 1
 	}
 
 	section := ""
@@ -192,8 +190,8 @@ func ParseINP(text string) *Network {
 
 		case "STATUS":
 			if len(f) > 1 {
-				if lk, ok := linkByID[f[0]]; ok {
-					lk.Status = strings.ToUpper(f[1])
+				if i, ok := linkByID[f[0]]; ok {
+					n.Links[i].Status = strings.ToUpper(f[1])
 				}
 			}
 
@@ -227,23 +225,23 @@ func ParseINP(text string) *Network {
 
 		case "QUALITY":
 			if len(f) > 1 {
-				if nd, ok := nodeByID[f[0]]; ok {
-					nd.InitQual = pf(f[1])
+				if i, ok := nodeByID[f[0]]; ok {
+					n.Nodes[i].InitQual = pf(f[1])
 				}
 			}
 
 		case "COORDINATES":
 			if len(f) >= 3 {
-				if nd, ok := nodeByID[f[0]]; ok {
-					nd.X = pf(f[1])
-					nd.Y = pf(f[2])
+				if i, ok := nodeByID[f[0]]; ok {
+					n.Nodes[i].X = pf(f[1])
+					n.Nodes[i].Y = pf(f[2])
 				}
 			}
 
 		case "VERTICES":
 			if len(f) >= 3 {
-				if lk, ok := linkByID[f[0]]; ok {
-					lk.Vertices = append(lk.Vertices, Point{X: pf(f[1]), Y: pf(f[2])})
+				if i, ok := linkByID[f[0]]; ok {
+					n.Links[i].Vertices = append(n.Links[i].Vertices, Point{X: pf(f[1]), Y: pf(f[2])})
 				}
 			}
 
@@ -325,9 +323,10 @@ func parseTimeLine(f []string, t *Times) {
 }
 
 func parseOptionLine(f []string, o *Options, q *Quality) {
-	line := strings.ToUpper(strings.Join(f, " "))
+	line := strings.Join(f, " ")
+	upper := strings.ToUpper(line)
 	rest := func(prefix string) (string, bool) {
-		if strings.HasPrefix(line, prefix) {
+		if strings.HasPrefix(upper, prefix) {
 			return strings.TrimSpace(line[len(prefix):]), true
 		}
 		return "", false
@@ -356,7 +355,7 @@ func parseOptionLine(f []string, o *Options, q *Quality) {
 		if len(ff) == 0 {
 			return
 		}
-		switch ff[0] {
+		switch strings.ToUpper(ff[0]) {
 		case "NONE":
 			q.Type = "NONE"
 		case "AGE":
