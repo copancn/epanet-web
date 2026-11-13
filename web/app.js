@@ -37,6 +37,8 @@ const state = {
   drag: null,
   hover: null,
   theme: 'light',
+  settingsOpen: 'analysis',
+  wizard: null,
 };
 
 const VALVE_TYPES = ['PRV', 'PSV', 'PBV', 'FCV', 'TCV', 'GPV', 'PCV'];
@@ -685,6 +687,7 @@ function select(sel) {
 }
 
 function markDirty(structural) {
+  if (state.wizard) { wizardMarkTouched(); return; }
   if (state.results) {
     if (structural) { clearResults(); }
     else { state.stale = true; updateRunButton(); }
@@ -996,114 +999,200 @@ function renameId(v) {
 }
 
 /* ============================ settings panel ============================ */
+/* ============================ settings: categories ============================ */
+function settingsCtx() {
+  return { o: state.net.options, tm: state.net.times, q: state.net.quality, dm: state.net.demandModel, rx: state.net.reactions, en: state.net.energy };
+}
+const SETTINGS_CATEGORIES = [
+  { key: 'analysis', label: 'set.analysis', build(p) {
+    const { o } = settingsCtx();
+    p.appendChild(field(t('set.flowUnits'), selectInput(o.flowUnits, [['LPS', t('unit.lps')], ['LPM', t('unit.lpm')], ['CMH', t('unit.cmh')], ['CMD', t('unit.cmd')], ['CMS', t('unit.cms')], ['MLD', t('unit.mld')], ['GPM', t('unit.gpm')], ['CFS', t('unit.cfs')], ['MGD', t('unit.mgd')]], v => { o.flowUnits = v; markDirty(false); })));
+    p.appendChild(field(t('set.headLoss'), selectInput(o.headLoss, [['H-W', 'Hazen-Williams'], ['D-W', 'Darcy-Weisbach'], ['C-M', 'Chezy-Manning']], v => { o.headLoss = v; markDirty(false); })));
+    p.appendChild(field(t('set.demandMult'), numInput(o.demandMult, v => { o.demandMult = v; markDirty(false); }, '0.1')));
+    const r = document.createElement('div'); r.className = 'field-row';
+    r.appendChild(field(t('set.trials'), numInput(o.trials, v => { o.trials = v; markDirty(false); }, '1')));
+    r.appendChild(field(t('set.accuracy'), numInput(o.accuracy, v => { o.accuracy = v; markDirty(false); }, '0.0001')));
+    p.appendChild(r);
+  } },
+  { key: 'time', label: 'set.time', build(p) {
+    const { tm } = settingsCtx();
+    p.appendChild(field(t('set.duration'), numInput(tm.duration / 3600, v => { tm.duration = Math.round(v * 3600); markDirty(false); }, '1')));
+    const r2 = document.createElement('div'); r2.className = 'field-row';
+    r2.appendChild(field(t('set.hydStep'), numInput(tm.hydStep / 3600, v => { tm.hydStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
+    r2.appendChild(field(t('set.reportStep'), numInput(tm.reportStep / 3600, v => { tm.reportStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
+    p.appendChild(r2);
+    const r3 = document.createElement('div'); r3.className = 'field-row';
+    r3.appendChild(field(t('set.patternStep'), numInput(tm.patternStep / 3600, v => { tm.patternStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
+    const sc = document.createElement('input'); sc.type = 'time'; sc.value = secToClock(tm.startClock);
+    sc.addEventListener('change', () => { tm.startClock = clockToSec(sc.value); markDirty(false); });
+    r3.appendChild(field(t('set.startClock'), sc));
+    p.appendChild(r3);
+    const r4 = document.createElement('div'); r4.className = 'field-row';
+    r4.appendChild(field(t('set.qualStep'), numInput(tm.qualStep / 3600, v => { tm.qualStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, 'any')));
+    r4.appendChild(field(t('set.ruleStep'), numInput((tm.ruleStep || 0) / 3600, v => { tm.ruleStep = Math.max(0, Math.round(v * 3600)); markDirty(false); }, 'any')));
+    p.appendChild(r4);
+    p.appendChild(field(t('set.statistic'), selectInput(tm.statistic, [['NONE', t('stat.series')], ['AVERAGED', t('stat.avg')], ['MINIMUM', t('stat.min')], ['MAXIMUM', t('stat.max')], ['RANGE', t('stat.range')]], v => { tm.statistic = v; markDirty(false); })));
+  } },
+  { key: 'quality', label: 'set.quality', build(p) {
+    const { q } = settingsCtx();
+    p.appendChild(field(t('set.qualType'), selectInput(q.type, [['NONE', t('qual.none')], ['CHEM', t('qual.chem')], ['AGE', t('qual.age')], ['TRACE', t('qual.trace')]], v => { q.type = v; markDirty(false); refreshSettingsUI(); })));
+    if (q.type === 'CHEM') {
+      const rq = document.createElement('div'); rq.className = 'field-row';
+      rq.appendChild(field(t('set.chemName'), textInput(q.chemName, v => { q.chemName = v; markDirty(false); })));
+      const cuOpts = [...new Set([q.chemUnits, 'mg/L', 'ug/L', 'g/L'])].filter(Boolean).map(u => [u, u]);
+      rq.appendChild(field(t('set.chemUnits'), selectInput(q.chemUnits, cuOpts, v => { q.chemUnits = v; markDirty(false); })));
+      p.appendChild(rq);
+    } else if (q.type === 'TRACE') {
+      p.appendChild(field(t('set.traceNode'), selectInput(q.traceNode, [['', t('opt.select')], ...nodeOptions()], v => { q.traceNode = v; markDirty(false); })));
+    }
+  } },
+  { key: 'demand', label: 'set.demandModel', build(p) {
+    const { dm } = settingsCtx();
+    p.appendChild(field(t('set.demandModel'), selectInput(dm.type || 'DDA', [['DDA', t('set.dda')], ['PDA', t('set.pda')]], v => { dm.type = v; markDirty(false); refreshSettingsUI(); })));
+    if ((dm.type || 'DDA') === 'PDA') {
+      const rd = document.createElement('div'); rd.className = 'field-row';
+      rd.appendChild(field(t('set.pmin'), numInput(dm.pmin, v => { dm.pmin = v; markDirty(false); })));
+      rd.appendChild(field(t('set.preq'), numInput(dm.preq, v => { dm.preq = v; markDirty(false); })));
+      p.appendChild(rd);
+      p.appendChild(field(t('set.pexp'), numInput(dm.pexp, v => { dm.pexp = v; markDirty(false); }, '0.1')));
+    }
+  } },
+  { key: 'reactions', label: 'set.reactions', build(p) {
+    const { rx } = settingsCtx();
+    const orderOpts = [[0, t('order.default')], [1, '1'], [2, '2']];
+    const ro = document.createElement('div'); ro.className = 'field-row';
+    ro.appendChild(field(t('set.bulkOrder'), selectInput(rx.bulkOrder || 0, orderOpts, v => { rx.bulkOrder = parseInt(v, 10); markDirty(false); })));
+    ro.appendChild(field(t('set.wallOrder'), selectInput(rx.wallOrder || 0, orderOpts, v => { rx.wallOrder = parseInt(v, 10); markDirty(false); })));
+    p.appendChild(ro);
+    p.appendChild(field(t('set.tankOrder'), selectInput(rx.tankOrder || 0, orderOpts, v => { rx.tankOrder = parseInt(v, 10); markDirty(false); })));
+    const rg = document.createElement('div'); rg.className = 'field-row';
+    rg.appendChild(field(t('set.globalBulk'), numInput(rx.globalBulk, v => { rx.globalBulk = v; markDirty(false); }, '0.01')));
+    rg.appendChild(field(t('set.globalWall'), numInput(rx.globalWall, v => { rx.globalWall = v; markDirty(false); }, '0.01')));
+    p.appendChild(rg);
+    const rl = document.createElement('div'); rl.className = 'field-row';
+    rl.appendChild(field(t('set.limitingPot'), numInput(rx.limitingPot, v => { rx.limitingPot = v; markDirty(false); })));
+    rl.appendChild(field(t('set.roughCorrel'), numInput(rx.roughCorrel, v => { rx.roughCorrel = v; markDirty(false); }, '0.01')));
+    p.appendChild(rl);
+  } },
+  { key: 'energy', label: 'set.energy', build(p) {
+    const { en } = settingsCtx();
+    const re = document.createElement('div'); re.className = 'field-row';
+    re.appendChild(field(t('set.globalEffic'), numInput(en.globalEfficiency, v => { en.globalEfficiency = v; markDirty(false); }, '1')));
+    re.appendChild(field(t('set.globalPrice'), numInput(en.globalPrice, v => { en.globalPrice = v; markDirty(false); }, '0.01')));
+    p.appendChild(re);
+    const re2 = document.createElement('div'); re2.className = 'field-row';
+    re2.appendChild(field(t('set.pricePattern'), selectInput(en.pricePattern, patternOptions(), v => { en.pricePattern = v; markDirty(false); })));
+    re2.appendChild(field(t('set.demandCharge'), numInput(en.demandCharge, v => { en.demandCharge = v; markDirty(false); }, '0.01')));
+    p.appendChild(re2);
+  } },
+  { key: 'advanced', label: 'set.advanced', build(p) {
+    const { o } = settingsCtx();
+    p.appendChild(field(t('set.pressureUnits'), selectInput(o.pressureUnits || '', [['', t('order.default')], ['PSI', 'PSI'], ['KPA', 'kPa'], ['METERS', 'm'], ['BAR', 'bar'], ['FEET', 'ft']], v => { o.pressureUnits = v; markDirty(false); })));
+    const ra = document.createElement('div'); ra.className = 'field-row';
+    ra.appendChild(field(t('set.specificGravity'), numInput(o.specificGravity, v => { o.specificGravity = v; markDirty(false); }, '0.01')));
+    ra.appendChild(field(t('set.viscosity'), numInput(o.viscosity, v => { o.viscosity = v; markDirty(false); }, '0.01')));
+    p.appendChild(ra);
+    const ra2 = document.createElement('div'); ra2.className = 'field-row';
+    ra2.appendChild(field(t('set.diffusivity'), numInput(o.diffusivity, v => { o.diffusivity = v; markDirty(false); }, '0.01')));
+    ra2.appendChild(field(t('set.emitterExponent'), numInput(o.emitterExponent, v => { o.emitterExponent = v; markDirty(false); }, '0.01')));
+    p.appendChild(ra2);
+    p.appendChild(field(t('set.defaultPattern'), selectInput(o.defaultPattern, patternOptions(), v => { o.defaultPattern = v; markDirty(false); })));
+    const rb = document.createElement('label'); rb.className = 'check-row';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!o.emitterBackflow;
+    cb.addEventListener('change', () => { o.emitterBackflow = cb.checked; markDirty(false); });
+    rb.appendChild(cb); rb.appendChild(document.createTextNode(t('set.emitterBackflow'))); p.appendChild(rb);
+    const ra3 = document.createElement('div'); ra3.className = 'field-row';
+    ra3.appendChild(field(t('set.checkFreq'), numInput(o.checkFreq, v => { o.checkFreq = Math.round(v); markDirty(false); }, '1')));
+    ra3.appendChild(field(t('set.maxCheck'), numInput(o.maxCheck, v => { o.maxCheck = Math.round(v); markDirty(false); }, '1')));
+    p.appendChild(ra3);
+    const ra4 = document.createElement('div'); ra4.className = 'field-row';
+    ra4.appendChild(field(t('set.dampLimit'), numInput(o.dampLimit, v => { o.dampLimit = v; markDirty(false); }, '0.001')));
+    ra4.appendChild(field(t('set.headError'), numInput(o.headError, v => { o.headError = v; markDirty(false); }, '0.001')));
+    p.appendChild(ra4);
+    p.appendChild(field(t('set.flowChange'), numInput(o.flowChange, v => { o.flowChange = v; markDirty(false); }, '0.001')));
+  } },
+];
+function categoryByKey(k) { return SETTINGS_CATEGORIES.find(c => c.key === k); }
+function refreshSettingsUI() { if (state.wizard) renderWizardBody(); else buildSettings(); }
+
 function buildSettings() {
   const p = $('settingsPanel'); p.innerHTML = '';
-  const o = state.net.options, tm = state.net.times, q = state.net.quality;
   p.appendChild(field(t('set.title'), textInput(state.net.title, v => { state.net.title = v; autosave(); })));
-
-  p.appendChild(sectionTitle(t('set.analysis')));
-  p.appendChild(field(t('set.flowUnits'), selectInput(o.flowUnits, [['LPS', t('unit.lps')], ['LPM', t('unit.lpm')], ['CMH', t('unit.cmh')], ['CMD', t('unit.cmd')], ['CMS', t('unit.cms')], ['MLD', t('unit.mld')], ['GPM', t('unit.gpm')], ['CFS', t('unit.cfs')], ['MGD', t('unit.mgd')]], v => { o.flowUnits = v; markDirty(false); })));
-  p.appendChild(field(t('set.headLoss'), selectInput(o.headLoss, [['H-W', 'Hazen-Williams'], ['D-W', 'Darcy-Weisbach'], ['C-M', 'Chezy-Manning']], v => { o.headLoss = v; markDirty(false); })));
-  p.appendChild(field(t('set.demandMult'), numInput(o.demandMult, v => { o.demandMult = v; markDirty(false); }, '0.1')));
-  const r = document.createElement('div'); r.className = 'field-row';
-  r.appendChild(field(t('set.trials'), numInput(o.trials, v => { o.trials = v; markDirty(false); }, '1')));
-  r.appendChild(field(t('set.accuracy'), numInput(o.accuracy, v => { o.accuracy = v; markDirty(false); }, '0.0001')));
-  p.appendChild(r);
-
-  p.appendChild(sectionTitle(t('set.time')));
-  p.appendChild(field(t('set.duration'), numInput(tm.duration / 3600, v => { tm.duration = Math.round(v * 3600); markDirty(false); }, '1')));
-  const r2 = document.createElement('div'); r2.className = 'field-row';
-  r2.appendChild(field(t('set.hydStep'), numInput(tm.hydStep / 3600, v => { tm.hydStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
-  r2.appendChild(field(t('set.reportStep'), numInput(tm.reportStep / 3600, v => { tm.reportStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
-  p.appendChild(r2);
-  const r3 = document.createElement('div'); r3.className = 'field-row';
-  r3.appendChild(field(t('set.patternStep'), numInput(tm.patternStep / 3600, v => { tm.patternStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
-  const sc = document.createElement('input'); sc.type = 'time'; sc.value = secToClock(tm.startClock);
-  sc.addEventListener('change', () => { tm.startClock = clockToSec(sc.value); markDirty(false); });
-  r3.appendChild(field(t('set.startClock'), sc));
-  p.appendChild(r3);
-  const r4 = document.createElement('div'); r4.className = 'field-row';
-  r4.appendChild(field(t('set.qualStep'), numInput(tm.qualStep / 3600, v => { tm.qualStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, 'any')));
-  r4.appendChild(field(t('set.ruleStep'), numInput((tm.ruleStep || 0) / 3600, v => { tm.ruleStep = Math.max(0, Math.round(v * 3600)); markDirty(false); }, 'any')));
-  p.appendChild(r4);
-  p.appendChild(field(t('set.statistic'), selectInput(tm.statistic, [['NONE', t('stat.series')], ['AVERAGED', t('stat.avg')], ['MINIMUM', t('stat.min')], ['MAXIMUM', t('stat.max')], ['RANGE', t('stat.range')]], v => { tm.statistic = v; markDirty(false); })));
-
-  p.appendChild(sectionTitle(t('set.quality')));
-  p.appendChild(field(t('set.qualType'), selectInput(q.type, [['NONE', t('qual.none')], ['CHEM', t('qual.chem')], ['AGE', t('qual.age')], ['TRACE', t('qual.trace')]], v => { q.type = v; markDirty(false); buildSettings(); })));
-  if (q.type === 'CHEM') {
-    const rq = document.createElement('div'); rq.className = 'field-row';
-    rq.appendChild(field(t('set.chemName'), textInput(q.chemName, v => { q.chemName = v; markDirty(false); })));
-    const cuOpts = [...new Set([q.chemUnits, 'mg/L', 'ug/L', 'g/L'])].filter(Boolean).map(u => [u, u]);
-    rq.appendChild(field(t('set.chemUnits'), selectInput(q.chemUnits, cuOpts, v => { q.chemUnits = v; markDirty(false); })));
-    p.appendChild(rq);
-  } else if (q.type === 'TRACE') {
-    p.appendChild(field(t('set.traceNode'), selectInput(q.traceNode, [['', t('opt.select')], ...nodeOptions()], v => { q.traceNode = v; markDirty(false); })));
-  }
-
-  const dm = state.net.demandModel;
-  p.appendChild(sectionTitle(t('set.demandModel')));
-  p.appendChild(field(t('set.demandModel'), selectInput(dm.type || 'DDA', [['DDA', t('set.dda')], ['PDA', t('set.pda')]], v => { dm.type = v; markDirty(false); buildSettings(); })));
-  if ((dm.type || 'DDA') === 'PDA') {
-    const rd = document.createElement('div'); rd.className = 'field-row';
-    rd.appendChild(field(t('set.pmin'), numInput(dm.pmin, v => { dm.pmin = v; markDirty(false); })));
-    rd.appendChild(field(t('set.preq'), numInput(dm.preq, v => { dm.preq = v; markDirty(false); })));
-    p.appendChild(rd);
-    p.appendChild(field(t('set.pexp'), numInput(dm.pexp, v => { dm.pexp = v; markDirty(false); }, '0.1')));
-  }
-
-  const rx = state.net.reactions;
-  p.appendChild(sectionTitle(t('set.reactions')));
-  const orderOpts = [[0, t('order.default')], [1, '1'], [2, '2']];
-  const ro = document.createElement('div'); ro.className = 'field-row';
-  ro.appendChild(field(t('set.bulkOrder'), selectInput(rx.bulkOrder || 0, orderOpts, v => { rx.bulkOrder = parseInt(v, 10); markDirty(false); })));
-  ro.appendChild(field(t('set.wallOrder'), selectInput(rx.wallOrder || 0, orderOpts, v => { rx.wallOrder = parseInt(v, 10); markDirty(false); })));
-  p.appendChild(ro);
-  p.appendChild(field(t('set.tankOrder'), selectInput(rx.tankOrder || 0, orderOpts, v => { rx.tankOrder = parseInt(v, 10); markDirty(false); })));
-  const rg = document.createElement('div'); rg.className = 'field-row';
-  rg.appendChild(field(t('set.globalBulk'), numInput(rx.globalBulk, v => { rx.globalBulk = v; markDirty(false); }, '0.01')));
-  rg.appendChild(field(t('set.globalWall'), numInput(rx.globalWall, v => { rx.globalWall = v; markDirty(false); }, '0.01')));
-  p.appendChild(rg);
-  const rl = document.createElement('div'); rl.className = 'field-row';
-  rl.appendChild(field(t('set.limitingPot'), numInput(rx.limitingPot, v => { rx.limitingPot = v; markDirty(false); })));
-  rl.appendChild(field(t('set.roughCorrel'), numInput(rx.roughCorrel, v => { rx.roughCorrel = v; markDirty(false); }, '0.01')));
-  p.appendChild(rl);
-
-  const en = state.net.energy;
-  p.appendChild(sectionTitle(t('set.energy')));
-  const re = document.createElement('div'); re.className = 'field-row';
-  re.appendChild(field(t('set.globalEffic'), numInput(en.globalEfficiency, v => { en.globalEfficiency = v; markDirty(false); }, '1')));
-  re.appendChild(field(t('set.globalPrice'), numInput(en.globalPrice, v => { en.globalPrice = v; markDirty(false); }, '0.01')));
-  p.appendChild(re);
-  const re2 = document.createElement('div'); re2.className = 'field-row';
-  re2.appendChild(field(t('set.pricePattern'), selectInput(en.pricePattern, patternOptions(), v => { en.pricePattern = v; markDirty(false); })));
-  re2.appendChild(field(t('set.demandCharge'), numInput(en.demandCharge, v => { en.demandCharge = v; markDirty(false); }, '0.01')));
-  p.appendChild(re2);
-
-  p.appendChild(sectionTitle(t('set.advanced')));
-  p.appendChild(field(t('set.pressureUnits'), selectInput(o.pressureUnits || '', [['', t('order.default')], ['PSI', 'PSI'], ['KPA', 'kPa'], ['METERS', 'm'], ['BAR', 'bar'], ['FEET', 'ft']], v => { o.pressureUnits = v; markDirty(false); })));
-  const ra = document.createElement('div'); ra.className = 'field-row';
-  ra.appendChild(field(t('set.specificGravity'), numInput(o.specificGravity, v => { o.specificGravity = v; markDirty(false); }, '0.01')));
-  ra.appendChild(field(t('set.viscosity'), numInput(o.viscosity, v => { o.viscosity = v; markDirty(false); }, '0.01')));
-  p.appendChild(ra);
-  const ra2 = document.createElement('div'); ra2.className = 'field-row';
-  ra2.appendChild(field(t('set.diffusivity'), numInput(o.diffusivity, v => { o.diffusivity = v; markDirty(false); }, '0.01')));
-  ra2.appendChild(field(t('set.emitterExponent'), numInput(o.emitterExponent, v => { o.emitterExponent = v; markDirty(false); }, '0.01')));
-  p.appendChild(ra2);
-  p.appendChild(field(t('set.defaultPattern'), selectInput(o.defaultPattern, patternOptions(), v => { o.defaultPattern = v; markDirty(false); })));
-  const rb = document.createElement('label'); rb.className = 'check-row';
-  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!o.emitterBackflow;
-  cb.addEventListener('change', () => { o.emitterBackflow = cb.checked; markDirty(false); });
-  rb.appendChild(cb); rb.appendChild(document.createTextNode(t('set.emitterBackflow'))); p.appendChild(rb);
-  const ra3 = document.createElement('div'); ra3.className = 'field-row';
-  ra3.appendChild(field(t('set.checkFreq'), numInput(o.checkFreq, v => { o.checkFreq = Math.round(v); markDirty(false); }, '1')));
-  ra3.appendChild(field(t('set.maxCheck'), numInput(o.maxCheck, v => { o.maxCheck = Math.round(v); markDirty(false); }, '1')));
-  p.appendChild(ra3);
-  const ra4 = document.createElement('div'); ra4.className = 'field-row';
-  ra4.appendChild(field(t('set.dampLimit'), numInput(o.dampLimit, v => { o.dampLimit = v; markDirty(false); }, '0.001')));
-  ra4.appendChild(field(t('set.headError'), numInput(o.headError, v => { o.headError = v; markDirty(false); }, '0.001')));
-  p.appendChild(ra4);
-  p.appendChild(field(t('set.flowChange'), numInput(o.flowChange, v => { o.flowChange = v; markDirty(false); }, '0.001')));
+  const wz = document.createElement('button'); wz.className = 'btn btn-sm set-wizard-btn'; wz.textContent = t('set.wizard');
+  wz.addEventListener('click', () => openWizard('edit')); p.appendChild(wz);
+  SETTINGS_CATEGORIES.forEach(c => {
+    const open = state.settingsOpen === c.key;
+    const item = document.createElement('div'); item.className = 'acc-item' + (open ? ' open' : '');
+    const head = document.createElement('button'); head.type = 'button'; head.className = 'acc-head';
+    head.innerHTML = `<span>${esc(t(c.label))}</span><span class="acc-chev">▾</span>`;
+    head.addEventListener('click', () => { state.settingsOpen = open ? null : c.key; buildSettings(); });
+    item.appendChild(head);
+    const body = document.createElement('div'); body.className = 'acc-body';
+    if (open) c.build(body);
+    item.appendChild(body);
+    p.appendChild(item);
+  });
 }
+
+/* ============================ new-project / settings wizard ============================ */
+let wizardBackup = null;
+function openWizard(mode) {
+  wizardBackup = mode === 'new' ? state.net : JSON.parse(JSON.stringify(state.net));
+  if (mode === 'new') state.net = emptyNetwork();
+  state.wizard = { mode, step: 0, touched: new Set() };
+  $('wizardModal').hidden = false;
+  renderWizard();
+}
+function closeWizard(apply) {
+  const w = state.wizard; if (!w) return;
+  const mode = w.mode;
+  state.wizard = null; $('wizardModal').hidden = true;
+  if (apply) {
+    if (mode === 'new') { loadNetwork(state.net); fitView(); toast(t('toast.newNet')); }
+    else { autosave(); buildSettings(); renderElemList(); render(); toast(t('toast.settingsApplied')); }
+  } else {
+    state.net = wizardBackup;
+    buildSettings(); renderElemList(); render();
+  }
+  wizardBackup = null;
+}
+function renderWizardStages() {
+  const w = state.wizard; if (!w) return;
+  const bar = $('wizardStages'); bar.innerHTML = '';
+  SETTINGS_CATEGORIES.forEach((c, i) => {
+    const b = document.createElement('button'); b.type = 'button';
+    b.className = 'wiz-stage' + (i === w.step ? ' cur' : '') + (w.touched.has(c.key) ? ' done' : '');
+    b.innerHTML = `<span class="ws-idx">${i + 1}</span><span>${esc(t(c.label))}</span>` + (w.touched.has(c.key) ? '<span class="ws-check">✓</span>' : '');
+    b.addEventListener('click', () => { w.step = i; renderWizard(); });
+    bar.appendChild(b);
+  });
+}
+function renderWizardBody() {
+  const w = state.wizard; if (!w) return;
+  const body = $('wizardBody'); body.innerHTML = '';
+  body.appendChild(field(t('set.title'), textInput(state.net.title, v => { state.net.title = v; })));
+  const c = SETTINGS_CATEGORIES[w.step];
+  body.appendChild(sectionTitle(t(c.label)));
+  const box = document.createElement('div'); c.build(box); body.appendChild(box);
+  $('wizardStepLabel').textContent = t('wiz.step', w.step + 1, SETTINGS_CATEGORIES.length, t(c.label));
+}
+function renderWizard() {
+  const w = state.wizard; if (!w) return;
+  $('wizardTitle').textContent = t(w.mode === 'new' ? 'wiz.title.new' : 'wiz.title.edit');
+  renderWizardStages(); renderWizardBody();
+  const last = w.step === SETTINGS_CATEGORIES.length - 1;
+  $('btnWizPrev').disabled = w.step === 0;
+  $('btnWizNext').textContent = last ? t(w.mode === 'new' ? 'wiz.finish' : 'wiz.apply') : t('wiz.next');
+}
+function wizardMarkTouched() {
+  const w = state.wizard; if (!w) return;
+  const c = SETTINGS_CATEGORIES[w.step]; if (c) w.touched.add(c.key);
+  renderWizardStages();
+}
+$('btnWizPrev').addEventListener('click', () => { const w = state.wizard; if (w && w.step > 0) { w.step--; renderWizard(); } });
+$('btnWizSkip').addEventListener('click', () => { const w = state.wizard; if (!w) return; if (w.step < SETTINGS_CATEGORIES.length - 1) { w.step++; renderWizard(); } else closeWizard(true); });
+$('btnWizNext').addEventListener('click', () => { const w = state.wizard; if (!w) return; wizardMarkTouched(); if (w.step < SETTINGS_CATEGORIES.length - 1) { w.step++; renderWizard(); } else closeWizard(true); });
+$('btnCloseWizard').addEventListener('click', () => closeWizard(false));
 function sectionTitle(txt) { const d = document.createElement('div'); d.className = 'prop-section-title'; d.textContent = txt; return d; }
 
 /* ============================ map panel / controls ============================ */
@@ -1671,10 +1760,9 @@ function loadNetwork(net) {
   state.net = net; select(null); clearResults(); buildSettings(); renderElemList(); syncMapUI(); render(); autosave();
   resetHistory();
 }
-function newNetwork() { loadNetwork(emptyNetwork()); fitView(); toast(t('toast.newNet')); }
+$('btnNew').addEventListener('click', () => { if (confirm(t('confirm.new'))) openWizard('new'); });
 
 $('btnExample').addEventListener('click', loadExample);
-$('btnNew').addEventListener('click', () => { if (confirm(t('confirm.new'))) newNetwork(); });
 $('btnRun').addEventListener('click', runSim);
 $('btnExport').addEventListener('click', async () => {
   try {
@@ -1745,6 +1833,7 @@ function updateRunButton() {
 function refreshLangUI() {
   updateEngineBadge(); updateRunButton(); updateThemeBtn();
   setTool(state.tool); renderElemList(); buildPropsForm(); buildSettings();
+  if (state.wizard) renderWizard();
   if (!$('mapPanel').hidden) buildMapPanel();
   if (!$('reviewModal').hidden) { state.review = reviewNetwork(); renderReview(); }
   if (!$('gisModal').hidden) renderGisModal();

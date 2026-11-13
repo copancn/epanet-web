@@ -241,6 +241,24 @@
     </div>
   </div>
 </div>
+<div class="modal-overlay" id="wizardModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <span id="wizardTitle">—</span>
+      <button class="btn btn-icon" id="btnCloseWizard">✕</button>
+    </div>
+    <div class="wiz-stages" id="wizardStages"></div>
+    <div class="modal-body">
+      <div class="rp-summary" id="wizardStepLabel"></div>
+      <div id="wizardBody"></div>
+    </div>
+    <div class="modal-foot wiz-foot">
+      <button class="btn" id="btnWizPrev" data-i18n="wiz.prev">上一步</button>
+      <button class="btn" id="btnWizSkip" data-i18n="wiz.skip">跳过此步</button>
+      <button class="btn btn-run" id="btnWizNext">下一步</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast" hidden></div>
 
 <script src="i18n.js"></script>
