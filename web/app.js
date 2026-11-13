@@ -942,7 +942,7 @@ function buildPropsForm() {
       rp.appendChild(field(t('prop.pricePat'), selectInput(obj.pricePattern, patternOptions(), v => { obj.pricePattern = v; markDirty(false); })));
       form.appendChild(rp);
     } else {
-      form.appendChild(field(t('prop.valveType'), selectInput(obj.type, VALVE_TYPES, v => { obj.type = v; markDirty(false); buildPropsForm(); render(); })));
+      form.appendChild(field(t('prop.valveType'), selectInput(obj.type, VALVE_TYPES.map(v => [v, t('valve.' + v.toLowerCase())]), v => { obj.type = v; markDirty(false); buildPropsForm(); render(); })));
       form.appendChild(field(t('prop.diamMm'), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
       if (obj.type === 'GPV') form.appendChild(field(t('prop.hlossCurve'), selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
       else {
