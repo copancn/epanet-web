@@ -42,15 +42,15 @@ const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
 
 /* ============================ api ============================ */
-async function api(path, method, body, isText) {
+async function api(path, method, body, reqText, respText) {
   const opt = { method: method || 'GET' };
   if (body !== undefined) {
-    opt.body = isText ? body : JSON.stringify(body);
-    opt.headers = { 'Content-Type': isText ? 'text/plain' : 'application/json' };
+    opt.body = reqText ? body : JSON.stringify(body);
+    opt.headers = { 'Content-Type': reqText ? 'text/plain' : 'application/json' };
   }
   const r = await fetch(path, opt);
   if (!r.ok) throw new Error('HTTP ' + r.status);
-  return isText ? r.text() : r.json();
+  return respText ? r.text() : r.json();
 }
 
 function toast(msg, kind) {
@@ -830,6 +830,7 @@ async function loadExample() {
 }
 function loadNetwork(net) {
   // normalize
+  net.nodes = net.nodes || []; net.links = net.links || [];
   net.patterns = net.patterns || []; net.curves = net.curves || []; net.controls = net.controls || [];
   net.options = { ...DEFAULT_OPTIONS, ...(net.options || {}) };
   net.times = { ...DEFAULT_TIMES, ...(net.times || {}) };
@@ -845,7 +846,7 @@ $('btnNew').addEventListener('click', () => { if (confirm(t('confirm.new'))) new
 $('btnRun').addEventListener('click', runSim);
 $('btnExport').addEventListener('click', async () => {
   try {
-    const text = await api('/api/export', 'POST', state.net, true);
+    const text = await api('/api/export', 'POST', state.net, false, true);
     download(text, (state.net.title || 'network') + '.inp', 'text/plain');
   } catch (e) { toast(t('err.export') + e.message, 'err'); }
 });
