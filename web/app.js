@@ -24,6 +24,7 @@ const state = {
   timeIndex: 0,
   nodeColor: 'pressure',
   linkColor: 'flow',
+  colorByValue: false,
   playing: false,
   stale: false,
   engineStatus: 'checking', engineVersion: 0,
@@ -31,11 +32,36 @@ const state = {
   mouse: { sx: 0, sy: 0, wx: 0, wy: 0 },
   drag: null,
   hover: null,
+  theme: 'light',
 };
 
-const TYPE_COLOR = { JUNCTION: '#334155', RESERVOIR: '#0ea5e9', TANK: '#8b5cf6', PIPE: '#64748b', PUMP: '#db2777' };
 const VALVE_TYPES = ['PRV', 'PSV', 'PBV', 'FCV', 'TCV', 'GPV'];
-function linkColorBase(t) { return t === 'PUMP' ? '#db2777' : (VALVE_TYPES.includes(t) ? '#ea580c' : '#64748b'); }
+const PALETTES = {
+  light: {
+    grid: '#eef2f7',
+    node: { JUNCTION: '#334155', RESERVOIR: '#0ea5e9', TANK: '#8b5cf6' },
+    link: { PIPE: '#64748b', PUMP: '#db2777', VALVE: '#ea580c' },
+    label: '#334155', labelDim: '#64748b',
+    sel: '#2563eb', hover: 'rgba(37,99,235,.22)', hoverFill: 'rgba(37,99,235,.12)', selFill: 'rgba(37,99,235,.18)',
+    nodeEdge: '#ffffff', symbolFill: '#ffffff', wave: 'rgba(255,255,255,.85)', waveDim: 'rgba(255,255,255,.7)',
+    halo: 'rgba(255,255,255,.92)', casing: 'rgba(255,255,255,.85)',
+    statusOpen: '#0f9d58', statusClosed: '#b0b8c4',
+  },
+  dark: {
+    grid: 'rgba(148,163,184,.14)',
+    node: { JUNCTION: '#cbd5e1', RESERVOIR: '#38bdf8', TANK: '#a78bfa' },
+    link: { PIPE: '#94a3b8', PUMP: '#f472b6', VALVE: '#fb923c' },
+    label: '#e2e8f0', labelDim: '#94a3b8',
+    sel: '#60a5fa', hover: 'rgba(96,165,250,.28)', hoverFill: 'rgba(96,165,250,.16)', selFill: 'rgba(96,165,250,.22)',
+    nodeEdge: '#0b1220', symbolFill: '#0b1220', wave: 'rgba(11,18,32,.85)', waveDim: 'rgba(11,18,32,.7)',
+    halo: 'rgba(11,18,32,.92)', casing: 'rgba(11,18,32,.85)',
+    statusOpen: '#34d399', statusClosed: '#64748b',
+  },
+};
+function pal() { return PALETTES[state.theme] || PALETTES.light; }
+function nodeColorBase(type) { const p = pal(); return p.node[type] || p.node.JUNCTION; }
+function linkColorBase(t) { const p = pal(); return t === 'PUMP' ? p.link.PUMP : (VALVE_TYPES.includes(t) ? p.link.VALVE : p.link.PIPE); }
+function mapOn() { return !!(state.net.geo && state.net.geo.enabled); }
 
 /* ============================ dom ============================ */
 const $ = (id) => document.getElementById(id);
@@ -100,14 +126,19 @@ function fitView() {
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!(w > 0) || !(h > 0)) return;
   canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   render();
 }
 
+// The canvas CSS box changes when the result bar / results panel appear or the
+// window resizes; keep the backing store in sync or stale pixels + stretching show.
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => resize()).observe(canvas);
+
 function render() {
   const W = canvas.clientWidth, H = canvas.clientHeight;
-  ctx.clearRect(0, 0, W, H);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.restore();
   if (state.net.geo && state.net.geo.enabled) drawMap(W, H); else drawGrid(W, H);
   state.net.links.forEach(l => drawLink(l));
   if (state.draft) drawDraft();
@@ -122,7 +153,7 @@ function drawGrid(W, H) {
   while (step * scale > 90 && step > 1e-6) step /= 2;
   const [wx0, wy0] = s2w(0, H);
   const [wx1, wy1] = s2w(W, 0);
-  ctx.strokeStyle = '#eef2f7'; ctx.lineWidth = 1; ctx.beginPath();
+  ctx.strokeStyle = pal().grid; ctx.lineWidth = 1; ctx.beginPath();
   for (let x = Math.floor(wx0 / step) * step; x <= wx1; x += step) {
     const [sx] = w2s(x, 0); ctx.moveTo(sx, 0); ctx.lineTo(sx, H);
   }
@@ -211,6 +242,10 @@ function drawMap(W, H) {
   const ty0 = Math.max(0, Math.floor((MERC_C / 2 - maxMy) / Tm));
   const ty1 = Math.min(n - 1, Math.floor((MERC_C / 2 - minMy) / Tm));
   if (tx1 < tx0 || ty1 < ty0 || (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 4096) return;
+  // Neutral base so the map-opacity blend never picks up the UI theme background
+  // (a dark backdrop would put a dark veil over the tiles in dark mode).
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
   ctx.save();
   ctx.globalAlpha = g.opacity;
   for (let ty = ty0; ty <= ty1; ty++) {
@@ -243,22 +278,30 @@ function drawLink(l) {
   const pts = linkPoints(l);
   if (!pts) return;
   const selected = state.sel && state.sel.kind === 'link' && state.sel.id === l.id;
+  const hovered = state.hover && state.hover.kind === 'link' && state.hover.id === l.id;
   const rs = state.results ? state.resLink[l.id] : null;
+  const heat = !!rs && state.colorByValue;
   let color = linkColorBase(l.type);
   let width = 2.4;
   let closed = l.status === 'CLOSED';
   if (rs) {
     const t = state.timeIndex;
-    if (state.linkColor === 'status') {
-      color = rs.status[t] > 0.5 ? '#0f9d58' : '#b0b8c4';
-    } else {
-      const r = metricRange(state.results.links, state.linkColor);
-      color = colorScale(norm(rs[state.linkColor][t], r));
+    if (heat) {
+      if (state.linkColor === 'status') {
+        color = rs.status[t] > 0.5 ? pal().statusOpen : pal().statusClosed;
+      } else {
+        const r = metricRange(state.results.links, state.linkColor);
+        color = colorScale(norm(rs[state.linkColor][t], r));
+      }
+      width = 3;
     }
     closed = rs.status[t] < 0.5;
-    width = 3;
   }
-  if (selected) { ctx.strokeStyle = '#2563eb'; ctx.lineWidth = width + 5; ctx.lineCap = 'round'; strokePolyline(pts); }
+  const p = pal();
+  if (hovered && !selected) { ctx.strokeStyle = p.hover; ctx.lineWidth = width + 6; ctx.lineCap = 'round'; strokePolyline(pts); }
+  if (selected) { ctx.strokeStyle = p.sel; ctx.lineWidth = width + 5; ctx.lineCap = 'round'; strokePolyline(pts); }
+  // casing under the pipe keeps it legible over busy map imagery
+  if (mapOn()) { ctx.strokeStyle = p.casing; ctx.lineWidth = width + 3; ctx.lineCap = 'round'; strokePolyline(pts); }
   ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round';
   ctx.setLineDash(closed ? [6, 5] : []);
   strokePolyline(pts);
@@ -267,7 +310,7 @@ function drawLink(l) {
   // flow direction arrow
   if (rs && Math.abs(rs.flow[state.timeIndex]) > 1e-6 && state.linkColor !== 'status') {
     const rev = rs.flow[state.timeIndex] < 0;
-    drawArrow(pts, rev, color);
+    drawArrow(pts, rev, heat ? color : linkColorBase(l.type));
   }
   // pump / valve symbol at midpoint
   const mid = polyMid(pts);
@@ -276,10 +319,10 @@ function drawLink(l) {
 
   // label
   if (state.view.scale > 0.35) {
-    ctx.fillStyle = selected ? '#2563eb' : '#64748b';
+    ctx.fillStyle = selected ? p.sel : p.labelDim;
     ctx.font = '10px Consolas, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(l.id, mid[0], mid[1] - 8);
+    haloText(l.id, mid[0], mid[1] - 8);
   }
 }
 
@@ -300,23 +343,34 @@ function polyMid(pts) {
   const a = pts[pts.length - 2], b = pts[pts.length - 1];
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, Math.atan2(b[1] - a[1], b[0] - a[0])];
 }
+function haloText(text, x, y) {
+  if (mapOn()) {
+    ctx.save();
+    ctx.strokeStyle = pal().halo; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+    ctx.strokeText(text, x, y);
+    ctx.restore();
+  }
+  ctx.fillText(text, x, y);
+}
 function drawArrow(pts, rev, color) {
   const m = polyMid(pts); let ang = m[2]; if (rev) ang += Math.PI;
   const s = 7;
-  ctx.fillStyle = color; ctx.beginPath();
+  ctx.beginPath();
   ctx.moveTo(m[0] + Math.cos(ang) * s, m[1] + Math.sin(ang) * s);
   ctx.lineTo(m[0] + Math.cos(ang + 2.5) * s, m[1] + Math.sin(ang + 2.5) * s);
   ctx.lineTo(m[0] + Math.cos(ang - 2.5) * s, m[1] + Math.sin(ang - 2.5) * s);
-  ctx.closePath(); ctx.fill();
+  ctx.closePath();
+  if (mapOn()) { ctx.strokeStyle = pal().halo; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.stroke(); }
+  ctx.fillStyle = color; ctx.fill();
 }
 function drawPumpSymbol(m, color) {
-  ctx.fillStyle = '#fff'; ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.fillStyle = pal().symbolFill; ctx.strokeStyle = color; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(m[0], m[1], 7, 0, 7); ctx.fill(); ctx.stroke();
   ctx.fillStyle = color; ctx.beginPath();
   ctx.moveTo(m[0] - 3, m[1] - 4); ctx.lineTo(m[0] + 5, m[1]); ctx.lineTo(m[0] - 3, m[1] + 4); ctx.closePath(); ctx.fill();
 }
 function drawValveSymbol(m, color) {
-  ctx.fillStyle = '#fff'; ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.fillStyle = pal().symbolFill; ctx.strokeStyle = color; ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(m[0] - 6, m[1] - 5); ctx.lineTo(m[0] - 6, m[1] + 5); ctx.lineTo(m[0] + 6, m[1] - 5); ctx.lineTo(m[0] + 6, m[1] + 5); ctx.closePath();
   ctx.fill(); ctx.stroke();
@@ -325,37 +379,45 @@ function drawValveSymbol(m, color) {
 function drawNode(n) {
   const [sx, sy] = w2s(n.x, n.y);
   const selected = state.sel && state.sel.kind === 'node' && state.sel.id === n.id;
+  const hovered = state.hover && state.hover.kind === 'node' && state.hover.id === n.id;
   const rs = state.results ? state.resNode[n.id] : null;
-  let fill = TYPE_COLOR[n.type] || '#334155';
-  if (rs) {
+  const p = pal();
+  let fill = nodeColorBase(n.type);
+  if (rs && state.colorByValue) {
     const r = metricRange(state.results.nodes, state.nodeColor);
     fill = colorScale(norm(rs[state.nodeColor][state.timeIndex], r));
   }
-  if (selected) {
-    ctx.fillStyle = 'rgba(37,99,235,.18)';
-    ctx.beginPath(); ctx.arc(sx, sy, 15, 0, 7); ctx.fill();
-    ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 13, 0, 7); ctx.stroke();
+  if (hovered && !selected) {
+    ctx.fillStyle = p.hoverFill;
+    ctx.beginPath(); ctx.arc(sx, sy, 14, 0, 7); ctx.fill();
   }
-  ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff';
+  if (selected) {
+    ctx.fillStyle = p.selFill;
+    ctx.beginPath(); ctx.arc(sx, sy, 15, 0, 7); ctx.fill();
+    ctx.strokeStyle = p.sel; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 13, 0, 7); ctx.stroke();
+  }
+  // backing disc separates the symbol from map imagery
+  if (mapOn()) { ctx.fillStyle = p.halo; ctx.beginPath(); ctx.arc(sx, sy, 12, 0, 7); ctx.fill(); }
+  ctx.lineWidth = 1.5; ctx.strokeStyle = p.nodeEdge;
   if (n.type === 'RESERVOIR') {
     ctx.fillStyle = fill; roundRect(sx - 9, sy - 7, 18, 14, 3); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 1; ctx.beginPath();
+    ctx.strokeStyle = p.wave; ctx.lineWidth = 1; ctx.beginPath();
     ctx.moveTo(sx - 6, sy - 1); ctx.quadraticCurveTo(sx - 3, sy - 4, sx, sy - 1); ctx.quadraticCurveTo(sx + 3, sy + 2, sx + 6, sy - 1); ctx.stroke();
   } else if (n.type === 'TANK') {
     ctx.fillStyle = fill; roundRect(sx - 7, sy - 9, 14, 18, 2); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(sx - 7, sy - 3); ctx.lineTo(sx + 7, sy - 3); ctx.stroke();
+    ctx.strokeStyle = p.waveDim; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(sx - 7, sy - 3); ctx.lineTo(sx + 7, sy - 3); ctx.stroke();
   } else {
     ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(sx, sy, 5.5, 0, 7); ctx.fill(); ctx.stroke();
   }
   if (state.view.scale > 0.3) {
-    ctx.fillStyle = selected ? '#2563eb' : '#334155';
+    ctx.fillStyle = selected ? p.sel : p.label;
     ctx.font = (selected ? 'bold ' : '') + '11px Consolas, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(n.id, sx, sy + 20);
+    haloText(n.id, sx, sy + 20);
     if (rs) {
       const v = rs[state.nodeColor][state.timeIndex];
-      ctx.fillStyle = '#64748b'; ctx.font = '9px Consolas, monospace';
-      ctx.fillText(fmt(v), sx, sy + 31);
+      ctx.fillStyle = p.labelDim; ctx.font = '9px Consolas, monospace';
+      haloText(fmt(v), sx, sy + 31);
     }
   }
 }
@@ -364,7 +426,7 @@ function drawDraft() {
   const a = nodeById(state.draft.from); if (!a) return;
   const [ax, ay] = w2s(a.x, a.y);
   const [bx, by] = w2s(state.draft.wx, state.draft.wy);
-  ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = pal().sel; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
   ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); ctx.setLineDash([]);
 }
 
@@ -443,8 +505,10 @@ canvas.addEventListener('mousemove', (e) => {
   if (!state.drag) {
     const h = hitTest(sx, sy);
     canvas.style.cursor = state.tool === 'select' ? (h ? 'pointer' : 'grab') : 'crosshair';
+    setHover(state.draft ? null : h, sx, sy);
     return;
   }
+  setHover(null);
   const dx = sx - state.drag.sx, dy = sy - state.drag.sy;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) state.drag.moved = true;
   if (state.drag.mode === 'pan') {
@@ -488,6 +552,65 @@ canvas.addEventListener('wheel', (e) => {
 function mousePos(e) {
   const r = canvas.getBoundingClientRect();
   return [e.clientX - r.left, e.clientY - r.top];
+}
+
+canvas.addEventListener('mouseleave', () => setHover(null));
+
+function setHover(hit, sx, sy) {
+  const prev = state.hover;
+  const changed = (prev && hit) ? (prev.kind !== hit.kind || prev.id !== hit.id) : (!!prev !== !!hit);
+  state.hover = hit;
+  if (changed) render();
+  updateTip(hit, sx, sy);
+}
+
+function updateTip(hit, sx, sy) {
+  const tip = $('canvasTip');
+  if (!hit || state.drag || state.draft) { tip.hidden = true; return; }
+  const html = tipContent(hit);
+  if (!html) { tip.hidden = true; return; }
+  tip.innerHTML = html;
+  tip.hidden = false;
+  const wrap = canvas.parentElement;
+  const pad = 14;
+  let x = sx + pad, y = sy + pad;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  if (x + tw > wrap.clientWidth - 8) x = sx - tw - pad;
+  if (y + th > wrap.clientHeight - 8) y = sy - th - pad;
+  tip.style.left = Math.max(4, x) + 'px';
+  tip.style.top = Math.max(4, y) + 'px';
+}
+
+function tipContent(hit) {
+  const obj = hit.kind === 'node' ? nodeById(hit.id) : linkById(hit.id);
+  if (!obj) return '';
+  const head = `<div class="tip-head"><span class="tip-id">${esc(obj.id)}</span><span class="tip-type">${esc(obj.type)}</span></div>`;
+  const rows = [];
+  if (state.results) {
+    const ti = state.timeIndex, u = state.results.units;
+    const rs = hit.kind === 'node' ? state.resNode[hit.id] : state.resLink[hit.id];
+    if (rs) {
+      if (hit.kind === 'node') {
+        rows.push([t('m.pressure'), fmt(rs.pressure[ti]), u.pressure]);
+        rows.push([t('m.head'), fmt(rs.head[ti]), u.head]);
+        rows.push([t('m.demand'), fmt(rs.demand[ti]), u.flow]);
+        if (u.quality) rows.push([t('m.quality'), fmt(rs.quality[ti]), u.quality]);
+      } else {
+        rows.push([t('m.flow'), fmt(rs.flow[ti]), u.flow]);
+        rows.push([t('m.velocity'), fmt(rs.velocity[ti]), u.velocity]);
+        rows.push([t('m.headloss'), fmt(rs.headloss[ti]), u.headloss]);
+        rows.push([t('m.status'), rs.status[ti] > 0.5 ? t('status.open') : t('status.closed'), '']);
+      }
+    }
+  } else if (hit.kind === 'node') {
+    rows.push([t('prop.elev'), fmt(obj.elevation), 'm']);
+    if (obj.type === 'JUNCTION') rows.push([t('prop.baseDemand'), fmt(obj.demand), '']);
+  } else {
+    rows.push([t('th.fromTo'), esc(obj.from) + '→' + esc(obj.to), '']);
+    rows.push([t('prop.length'), fmt(obj.length), 'm']);
+  }
+  if (!rows.length) return head;
+  return head + rows.map(([k, v, un]) => `<div class="tip-row"><span>${esc(k)}</span><span>${v}${un ? ' ' + esc(un) : ''}</span></div>`).join('');
 }
 
 function handleLinkClick(nodeId) {
@@ -556,6 +679,51 @@ function markDirty(structural) {
     else { state.stale = true; updateRunButton(); }
   }
   autosave();
+  recordHistory(structural);
+}
+
+/* ============================ undo / redo ============================ */
+// Snapshot history: each edit burst pushes the pre-edit network snapshot.
+// Rapid non-structural edits (drag, typing) coalesce into one step.
+const HIST_MAX = 60, HIST_COALESCE_MS = 600;
+const histUndo = [], histRedo = [];
+let histBaseline = null, histLast = 0;
+function cloneNet() { return JSON.parse(JSON.stringify(state.net)); }
+function resetHistory() { histUndo.length = 0; histRedo.length = 0; histBaseline = cloneNet(); histLast = 0; updateHistoryUI(); }
+function recordHistory(force) {
+  if (histBaseline === null) { histBaseline = cloneNet(); return; }
+  const now = Date.now();
+  if (!force && now - histLast < HIST_COALESCE_MS) { histLast = now; return; }
+  histUndo.push(histBaseline);
+  if (histUndo.length > HIST_MAX) histUndo.shift();
+  histRedo.length = 0;
+  histBaseline = cloneNet();
+  histLast = now;
+  updateHistoryUI();
+}
+function restoreNet(snap) {
+  state.net = snap; state.sel = null; state.draft = null;
+  clearResults();
+  renderElemList(); buildPropsForm(); buildSettings(); syncMapUI(); render();
+  autosave();
+}
+function undo() {
+  if (!histUndo.length) return;
+  histRedo.push(cloneNet());
+  restoreNet(histUndo.pop());
+  histBaseline = cloneNet(); histLast = 0;
+  updateHistoryUI();
+}
+function redo() {
+  if (!histRedo.length) return;
+  histUndo.push(cloneNet());
+  restoreNet(histRedo.pop());
+  histBaseline = cloneNet(); histLast = 0;
+  updateHistoryUI();
+}
+function updateHistoryUI() {
+  $('btnUndo').disabled = !histUndo.length;
+  $('btnRedo').disabled = !histRedo.length;
 }
 
 /* ============================ tools / tabs ============================ */
@@ -589,7 +757,7 @@ function renderElemList() {
     const kind = state.elemTab === 'nodes' ? 'node' : 'link';
     const div = document.createElement('div');
     div.className = 'elem-item' + (state.sel && state.sel.kind === kind && state.sel.id === it.id ? ' sel' : '');
-    const color = kind === 'node' ? (TYPE_COLOR[it.type] || '#334155') : linkColorBase(it.type);
+    const color = kind === 'node' ? nodeColorBase(it.type) : linkColorBase(it.type);
     const sub = kind === 'node' ? it.type : `${it.from}→${it.to}`;
     div.innerHTML = `<span class="swatch" style="background:${color}"></span><span class="eid">${esc(it.id)}</span><span class="etype">${esc(sub)}</span>`;
     div.addEventListener('click', () => { select({ kind, id: it.id }); centerOn(it); });
@@ -668,6 +836,7 @@ function buildPropsForm() {
       form.appendChild(field(t('prop.minVol'), numInput(obj.minVol, v => { obj.minVol = v; markDirty(false); })));
       form.appendChild(field(t('prop.volCurve'), selectInput(obj.volCurve, curveOptions(), v => { obj.volCurve = v; markDirty(false); })));
     }
+    if (obj.type === 'JUNCTION' || obj.type === 'TANK') form.appendChild(demButton('sel'));
     form.appendChild(field(t('prop.initQual'), numInput(obj.initQual, v => { obj.initQual = v; markDirty(false); })));
   } else {
     const row = document.createElement('div'); row.className = 'field-row';
@@ -751,7 +920,9 @@ function buildSettings() {
   p.appendChild(r2);
   const r3 = document.createElement('div'); r3.className = 'field-row';
   r3.appendChild(field(t('set.patternStep'), numInput(tm.patternStep / 3600, v => { tm.patternStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
-  r3.appendChild(field(t('set.startClock'), numInput(tm.startClock / 3600, v => { tm.startClock = Math.round(v * 3600); markDirty(false); }, '1')));
+  const sc = document.createElement('input'); sc.type = 'time'; sc.value = secToClock(tm.startClock);
+  sc.addEventListener('change', () => { tm.startClock = clockToSec(sc.value); markDirty(false); });
+  r3.appendChild(field(t('set.startClock'), sc));
   p.appendChild(r3);
   p.appendChild(field(t('set.statistic'), selectInput(tm.statistic, [['NONE', t('stat.series')], ['AVERAGED', t('stat.avg')], ['MINIMUM', t('stat.min')], ['MAXIMUM', t('stat.max')], ['RANGE', t('stat.range')]], v => { tm.statistic = v; markDirty(false); })));
 
@@ -760,7 +931,8 @@ function buildSettings() {
   if (q.type === 'CHEM') {
     const rq = document.createElement('div'); rq.className = 'field-row';
     rq.appendChild(field(t('set.chemName'), textInput(q.chemName, v => { q.chemName = v; markDirty(false); })));
-    rq.appendChild(field(t('set.chemUnits'), textInput(q.chemUnits, v => { q.chemUnits = v; markDirty(false); })));
+    const cuOpts = [...new Set([q.chemUnits, 'mg/L', 'ug/L', 'g/L'])].filter(Boolean).map(u => [u, u]);
+    rq.appendChild(field(t('set.chemUnits'), selectInput(q.chemUnits, cuOpts, v => { q.chemUnits = v; markDirty(false); })));
     p.appendChild(rq);
   } else if (q.type === 'TRACE') {
     p.appendChild(field(t('set.traceNode'), selectInput(q.traceNode, [['', t('opt.select')], ...nodeOptions()], v => { q.traceNode = v; markDirty(false); })));
@@ -796,6 +968,7 @@ function buildMapPanel() {
   })));
   const fit = document.createElement('button'); fit.className = 'btn btn-sm'; fit.textContent = t('map.fit');
   fit.addEventListener('click', fitView); p.appendChild(fit);
+  p.appendChild(demButton('all'));
 }
 function updateAttribution() {
   const el = $('mapAttribution'); const g = state.net.geo;
@@ -821,52 +994,197 @@ $('btnMapSettings').addEventListener('click', () => {
   if (!p.hidden) buildMapPanel();
 });
 
-/* ============================ data modal ============================ */
+/* ============================ graphical data editors ============================ */
+const CURVE_TYPES = ['PUMP', 'EFFICIENCY', 'VOLUME', 'HEADLOSS', 'GENERIC'];
+const dataEditors = [];
+function btnSm(label, fn) { const b = document.createElement('button'); b.className = 'btn btn-sm'; b.textContent = label; b.addEventListener('click', fn); return b; }
+function linkOptions() { return state.net.links.map(l => [l.id, l.id]); }
+function secToClock(sec) { const h = Math.floor(sec / 3600) % 24, m = Math.floor((sec % 3600) / 60); return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0'); }
+function clockToSec(s) { const [h, m] = String(s || '0:0').split(':').map(Number); return (h || 0) * 3600 + (m || 0) * 60; }
+function redrawEditors() { dataEditors.forEach(cv => { if (cv._redraw) cv._redraw(); }); }
+window.addEventListener('resize', () => { if (!$('dataModal').hidden) redrawEditors(); });
+function edCanvas(height) { const cv = document.createElement('canvas'); cv.className = 'ed-canvas'; cv.style.height = height + 'px'; dataEditors.push(cv); return cv; }
+function edSetup(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || 600, H = cv.clientHeight || 120;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+  return { c, W, H };
+}
+function presetValues(kind, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const hour = i * (24 / n);
+    if (kind === 'const') out.push(1);
+    else if (kind === 'diurnal') out.push(Math.round((0.7 + 0.5 * Math.exp(-Math.pow(hour - 8, 2) / 8) + 0.4 * Math.exp(-Math.pow(hour - 19, 2) / 8)) * 100) / 100);
+    else out.push(hour < 6 ? 0.4 : 1.2);
+  }
+  return out;
+}
+function barEditor(initial) {
+  const cv = edCanvas(120);
+  let vals = (initial || []).slice(); if (!vals.length) vals = [1];
+  let top = Math.max(3, Math.ceil(Math.max(...vals)));
+  const PL = 30, PR = 8, PT = 14, PB = 18; let drag = -1, hover = -1;
+  function draw() {
+    const { c, W, H } = edSetup(cv); const p = pal();
+    const pw = W - PL - PR, ph = H - PT - PB, n = vals.length, bw = pw / n;
+    const Y = v => PT + ph - (v / top) * ph;
+    c.font = '10px system-ui, sans-serif'; c.lineWidth = 1;
+    for (let g = 0; g <= top; g++) { const y = Y(g); c.strokeStyle = p.grid; c.beginPath(); c.moveTo(PL, y); c.lineTo(W - PR, y); c.stroke(); c.fillStyle = p.labelDim; c.textAlign = 'right'; c.textBaseline = 'middle'; c.fillText(String(g), PL - 4, y); }
+    vals.forEach((v, i) => {
+      const x = PL + i * bw, y = Y(v), active = (i === drag || i === hover);
+      c.fillStyle = active ? p.sel : p.link.PIPE; c.globalAlpha = active ? 0.95 : 0.7;
+      c.fillRect(x + 1, y, Math.max(1, bw - 2), PT + ph - y); c.globalAlpha = 1;
+      if (active) { c.fillStyle = p.label; c.textAlign = 'center'; c.textBaseline = 'bottom'; c.fillText(v.toFixed(2), x + bw / 2, y - 2); }
+    });
+    c.fillStyle = p.labelDim; c.textAlign = 'center'; c.textBaseline = 'top';
+    const step = Math.max(1, Math.ceil(n / 8));
+    for (let i = 0; i < n; i += step) c.fillText(String(i), PL + i * bw + bw / 2, H - PB + 4);
+  }
+  const idxAt = sx => { const pw = cv.clientWidth - PL - PR; const i = Math.floor((sx - PL) / (pw / vals.length)); return (i >= 0 && i < vals.length) ? i : -1; };
+  const valAt = sy => { const ph = cv.clientHeight - PT - PB; return Math.round(Math.max(0, Math.min(top, (PT + ph - sy) / ph * top)) * 100) / 100; };
+  cv.addEventListener('pointerdown', e => { const r = cv.getBoundingClientRect(); drag = idxAt(e.clientX - r.left); if (drag >= 0) { try { cv.setPointerCapture(e.pointerId); } catch (_) {} vals[drag] = valAt(e.clientY - r.top); draw(); } });
+  cv.addEventListener('pointermove', e => { const r = cv.getBoundingClientRect(); const sx = e.clientX - r.left, sy = e.clientY - r.top; if (drag >= 0) { vals[drag] = valAt(sy); draw(); } else { const h = idxAt(sx); if (h !== hover) { hover = h; draw(); } } });
+  cv.addEventListener('pointerup', () => { drag = -1; draw(); });
+  cv.addEventListener('pointerleave', () => { if (drag < 0) { hover = -1; draw(); } });
+  cv._redraw = draw; cv._get = () => vals.slice();
+  cv._set = v => { vals = v.slice(); if (!vals.length) vals = [1]; top = Math.max(3, Math.ceil(Math.max(...vals))); draw(); };
+  return cv;
+}
+function curveEditor(initial) {
+  const cv = edCanvas(160);
+  let pts = (initial || []).map(p => ({ x: p.x, y: p.y })); if (pts.length < 2) pts = [{ x: 0, y: 50 }, { x: 50, y: 30 }];
+  let bx0, bx1, by0, by1;
+  function bounds() {
+    const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+    let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    if (x1 - x0 < 1e-6) { x0 -= 1; x1 += 1; } if (y1 - y0 < 1e-6) { y0 -= 1; y1 += 1; }
+    const mx = (x1 - x0) * 0.1, my = (y1 - y0) * 0.15;
+    bx0 = x0 - mx; bx1 = x1 + mx; by0 = Math.max(0, y0 - my); by1 = y1 + my;
+  }
+  bounds();
+  const PL = 36, PR = 10, PT = 10, PB = 20; let drag = -1;
+  const X = x => PL + (x - bx0) / (bx1 - bx0) * (cv.clientWidth - PL - PR);
+  const Y = y => PT + (cv.clientHeight - PT - PB) - (y - by0) / (by1 - by0) * (cv.clientHeight - PT - PB);
+  const invX = sx => bx0 + (sx - PL) / (cv.clientWidth - PL - PR) * (bx1 - bx0);
+  const invY = sy => by0 + (PT + (cv.clientHeight - PT - PB) - sy) / (cv.clientHeight - PT - PB) * (by1 - by0);
+  function draw() {
+    const { c, W, H } = edSetup(cv); const p = pal();
+    c.font = '10px system-ui, sans-serif'; c.lineWidth = 1;
+    for (let g = 0; g <= 4; g++) {
+      const y = PT + (H - PT - PB) * g / 4, x = PL + (W - PL - PR) * g / 4;
+      c.strokeStyle = p.grid; c.beginPath(); c.moveTo(PL, y); c.lineTo(W - PR, y); c.stroke();
+      c.beginPath(); c.moveTo(x, PT); c.lineTo(x, H - PB); c.stroke();
+      c.fillStyle = p.labelDim; c.textAlign = 'right'; c.textBaseline = 'middle'; c.fillText(fmt(by1 - (by1 - by0) * g / 4), PL - 4, y);
+      c.textAlign = 'center'; c.textBaseline = 'top'; c.fillText(fmt(bx0 + (bx1 - bx0) * g / 4), x, H - PB + 4);
+    }
+    const s = [...pts].sort((a, b) => a.x - b.x);
+    c.strokeStyle = p.sel; c.lineWidth = 2; c.beginPath();
+    s.forEach((pt, i) => { const x = X(pt.x), y = Y(pt.y); i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
+    pts.forEach((pt, i) => { c.fillStyle = (i === drag) ? p.hover : p.sel; c.beginPath(); c.arc(X(pt.x), Y(pt.y), i === drag ? 6 : 4, 0, Math.PI * 2); c.fill(); c.strokeStyle = p.nodeEdge; c.lineWidth = 1; c.stroke(); });
+  }
+  const hit = (sx, sy) => { for (let i = 0; i < pts.length; i++) if (Math.hypot(sx - X(pts[i].x), sy - Y(pts[i].y)) < 8) return i; return -1; };
+  cv.addEventListener('pointerdown', e => { const r = cv.getBoundingClientRect(); drag = hit(e.clientX - r.left, e.clientY - r.top); if (drag >= 0) { try { cv.setPointerCapture(e.pointerId); } catch (_) {} } });
+  cv.addEventListener('pointermove', e => { if (drag < 0) return; const r = cv.getBoundingClientRect(); pts[drag].x = Math.round(Math.max(bx0, Math.min(bx1, invX(e.clientX - r.left))) * 100) / 100; pts[drag].y = Math.round(Math.max(by0, Math.min(by1, invY(e.clientY - r.top))) * 100) / 100; draw(); });
+  cv.addEventListener('pointerup', () => { drag = -1; draw(); });
+  cv.addEventListener('dblclick', e => { const r = cv.getBoundingClientRect(); const sx = e.clientX - r.left, sy = e.clientY - r.top; const h = hit(sx, sy); if (h >= 0) { if (pts.length > 2) { pts.splice(h, 1); draw(); } } else { pts.push({ x: Math.round(invX(sx) * 100) / 100, y: Math.round(invY(sy) * 100) / 100 }); draw(); } });
+  cv._redraw = draw; cv._get = () => pts.map(p => ({ x: p.x, y: p.y }));
+  cv._set = v => { pts = v.map(p => ({ x: p.x, y: p.y })); if (pts.length < 2) pts = [{ x: 0, y: 50 }, { x: 50, y: 30 }]; bounds(); draw(); };
+  return cv;
+}
+function patternRow(id, values) {
+  const row = document.createElement('div'); row.className = 'data-card';
+  const head = document.createElement('div'); head.className = 'data-card-head';
+  const idIn = textInput(id, () => {}); idIn.className = 'did'; head.appendChild(idIn);
+  const ed = barEditor(values);
+  head.appendChild(selectInput('', [['', t('data.preset')], ['const', t('preset.const')], ['diurnal', t('preset.diurnal')], ['night', t('preset.night')]], v => { if (!v) return; ed._set(presetValues(v, ed._get().length || 24)); }));
+  head.appendChild(btnSm(t('data.addStep'), () => { const v = ed._get(); v.push(v.length ? v[v.length - 1] : 1); ed._set(v); }));
+  head.appendChild(btnSm(t('data.delStep'), () => { const v = ed._get(); if (v.length > 1) { v.pop(); ed._set(v); } }));
+  head.appendChild(btnSm('✕', () => row.remove()));
+  row.appendChild(head); row.appendChild(ed);
+  const hint = document.createElement('div'); hint.className = 'ed-hint'; hint.textContent = t('data.edHintBar'); row.appendChild(hint);
+  row._ed = ed; row._idIn = idIn;
+  return row;
+}
+function curveRow(id, type, points) {
+  const row = document.createElement('div'); row.className = 'data-card';
+  const head = document.createElement('div'); head.className = 'data-card-head';
+  const idIn = textInput(id, () => {}); idIn.className = 'did'; head.appendChild(idIn);
+  const typeSel = selectInput(type, CURVE_TYPES.map(c => [c, c]), () => {}); typeSel.className = 'dtype'; head.appendChild(typeSel);
+  const ed = curveEditor(points);
+  head.appendChild(btnSm(t('data.addPoint'), () => { const v = ed._get(); const last = v[v.length - 1]; v.push({ x: last.x + 10, y: Math.max(0, last.y - 5) }); ed._set(v); }));
+  head.appendChild(btnSm(t('data.delPoint'), () => { const v = ed._get(); if (v.length > 2) { v.pop(); ed._set(v); } }));
+  head.appendChild(btnSm('✕', () => row.remove()));
+  row.appendChild(head); row.appendChild(ed);
+  const hint = document.createElement('div'); hint.className = 'ed-hint'; hint.textContent = t('data.edHintCurve'); row.appendChild(hint);
+  row._ed = ed; row._idIn = idIn; row._typeSel = typeSel;
+  return row;
+}
+/* ---- structured control rules ---- */
+function parseControl(line) {
+  let m = line.match(/^LINK\s+(\S+)\s+(OPEN|CLOSED|[\d.]+)\s+IF\s+NODE\s+(\S+)\s+(ABOVE|BELOW)\s+([\d.-]+)\s*$/i);
+  if (m) { const set = /^[\d.]+$/.test(m[2]); return { link: m[1], action: set ? 'SET' : m[2].toUpperCase(), setting: set ? parseFloat(m[2]) : 0, cond: 'NODE', node: m[3], op: m[4].toUpperCase(), value: parseFloat(m[5]), clock: '06:00' }; }
+  m = line.match(/^LINK\s+(\S+)\s+(OPEN|CLOSED|[\d.]+)\s+AT\s+CLOCKTIME\s+(\d{1,2}:\d{2})\s*$/i);
+  if (m) { const set = /^[\d.]+$/.test(m[2]); return { link: m[1], action: set ? 'SET' : m[2].toUpperCase(), setting: set ? parseFloat(m[2]) : 0, cond: 'TIME', node: '', op: 'BELOW', value: 0, clock: m[3] }; }
+  return { raw: line };
+}
+function controlString(r) {
+  if (r.raw !== undefined) return r.raw.trim();
+  if (!r.link) return '';
+  const act = r.action === 'SET' ? String(r.setting) : r.action;
+  if (r.cond === 'NODE') { if (!r.node) return ''; return `LINK ${r.link} ${act} IF NODE ${r.node} ${r.op} ${r.value}`; }
+  return `LINK ${r.link} ${act} AT CLOCKTIME ${r.clock}`;
+}
+function controlRow(rule) {
+  const row = document.createElement('div'); row.className = 'ctl-row'; row._rule = rule;
+  function rebuild() {
+    row.innerHTML = '';
+    if (rule.raw !== undefined) { const ti = textInput(rule.raw, v => { rule.raw = v; }); ti.className = 'ctl-raw'; row.appendChild(ti); row.appendChild(btnSm('✕', () => row.remove())); return; }
+    const mk = (label, el) => { const f = field(label, el); f.className = 'field ctl-field'; row.appendChild(f); };
+    mk(t('ctl.link'), selectInput(rule.link, linkOptions(), v => { rule.link = v; }));
+    mk(t('ctl.action'), selectInput(rule.action, [['OPEN', t('ctl.open')], ['CLOSED', t('ctl.closed')], ['SET', t('ctl.set')]], v => { rule.action = v; rebuild(); }));
+    if (rule.action === 'SET') mk(t('ctl.setting'), numInput(rule.setting, v => { rule.setting = v; }, '0.1'));
+    mk(t('ctl.cond'), selectInput(rule.cond, [['NODE', t('ctl.condNode')], ['TIME', t('ctl.condTime')]], v => { rule.cond = v; rebuild(); }));
+    if (rule.cond === 'NODE') {
+      mk(t('ctl.node'), selectInput(rule.node, nodeOptions(), v => { rule.node = v; }));
+      mk(t('ctl.op'), selectInput(rule.op, [['BELOW', t('ctl.below')], ['ABOVE', t('ctl.above')]], v => { rule.op = v; }));
+      mk(t('ctl.value'), numInput(rule.value, v => { rule.value = v; }, '0.1'));
+    } else {
+      const ti = document.createElement('input'); ti.type = 'time'; ti.value = rule.clock; ti.addEventListener('change', () => { rule.clock = ti.value || '00:00'; });
+      mk(t('ctl.clock'), ti);
+    }
+    row.appendChild(btnSm('✕', () => row.remove()));
+  }
+  rebuild();
+  return row;
+}
 function openData() {
-  const pl = $('patternList'); pl.innerHTML = '';
-  state.net.patterns.forEach(p => pl.appendChild(patternRow(p.id, p.values.join(', '))));
-  const cl = $('curveList'); cl.innerHTML = '';
-  state.net.curves.forEach(c => cl.appendChild(curveRow(c.id, c.type, c.points.map(pt => `${pt.x},${pt.y}`).join('\n'))));
-  $('controlsText').value = state.net.controls.join('\n');
   $('dataModal').hidden = false;
-}
-function patternRow(id, vals) {
-  const row = document.createElement('div'); row.className = 'data-row';
-  row.innerHTML = `<input type="text" class="did" value="${esc(id)}" placeholder="${esc(t('data.patternId'))}"><textarea class="dvals" rows="2" placeholder="1, 1.2, 0.8 ...">${esc(vals)}</textarea><button class="btn btn-del-row">✕</button>`;
-  row.querySelector('.btn-del-row').addEventListener('click', () => row.remove());
-  return row;
-}
-function curveRow(id, type, pts) {
-  const row = document.createElement('div'); row.className = 'data-row';
-  const opts = ['PUMP', 'EFFICIENCY', 'VOLUME', 'HEADLOSS', 'GENERIC'].map(ct => `<option ${ct === type ? 'selected' : ''}>${ct}</option>`).join('');
-  row.innerHTML = `<input type="text" class="did" value="${esc(id)}" placeholder="${esc(t('data.curveId'))}"><select class="dtype">${opts}</select><textarea class="dvals" rows="2" placeholder="0,55&#10;40,45&#10;80,25">${esc(pts)}</textarea><button class="btn btn-del-row">✕</button>`;
-  row.querySelector('.btn-del-row').addEventListener('click', () => row.remove());
-  return row;
+  dataEditors.length = 0;
+  const pl = $('patternList'); pl.innerHTML = '';
+  state.net.patterns.forEach(p => pl.appendChild(patternRow(p.id, p.values)));
+  const cl = $('curveList'); cl.innerHTML = '';
+  state.net.curves.forEach(c => cl.appendChild(curveRow(c.id, c.type, c.points)));
+  const ctl = $('controlList'); ctl.innerHTML = '';
+  state.net.controls.forEach(line => ctl.appendChild(controlRow(parseControl(line))));
+  redrawEditors();
 }
 function applyData() {
   const patterns = [];
-  $('patternList').querySelectorAll('.data-row').forEach(r => {
-    const id = r.querySelector('.did').value.trim(); if (!id) return;
-    const vals = r.querySelector('.dvals').value.split(/[,\s]+/).map(parseFloat).filter(v => !isNaN(v));
-    patterns.push({ id, values: vals.length ? vals : [1] });
-  });
+  $('patternList').querySelectorAll('.data-card').forEach(r => { const id = r._idIn.value.trim(); if (!id) return; patterns.push({ id, values: r._ed._get() }); });
   const curves = [];
-  $('curveList').querySelectorAll('.data-row').forEach(r => {
-    const id = r.querySelector('.did').value.trim(); if (!id) return;
-    const type = r.querySelector('.dtype').value;
-    const points = r.querySelector('.dvals').value.split('\n').map(line => {
-      const [x, y] = line.split(/[,\s]+/).map(parseFloat); return (!isNaN(x) && !isNaN(y)) ? { x, y } : null;
-    }).filter(Boolean);
-    curves.push({ id, type, points });
-  });
-  const controls = $('controlsText').value.split('\n').map(s => s.trim()).filter(Boolean);
+  $('curveList').querySelectorAll('.data-card').forEach(r => { const id = r._idIn.value.trim(); if (!id) return; curves.push({ id, type: r._typeSel.value, points: r._ed._get() }); });
+  const controls = [];
+  $('controlList').querySelectorAll('.ctl-row').forEach(r => { const s = controlString(r._rule); if (s) controls.push(s); });
   state.net.patterns = patterns; state.net.curves = curves; state.net.controls = controls;
   $('dataModal').hidden = true; markDirty(true); buildSettings(); toast(t('toast.dataApplied'), 'ok');
 }
-$('btnAddPattern').addEventListener('click', () => $('patternList').appendChild(patternRow(genId('PAT', state.net.patterns), '1, 1, 1, 1')));
-$('btnAddCurve').addEventListener('click', () => $('curveList').appendChild(curveRow(genId('C', state.net.curves), 'PUMP', '0,50\n50,30')));
+$('btnAddPattern').addEventListener('click', () => { const r = patternRow(genId('PAT', state.net.patterns), [1, 1, 1, 1]); $('patternList').appendChild(r); r._ed._redraw(); });
+$('btnAddCurve').addEventListener('click', () => { const r = curveRow(genId('C', state.net.curves), 'PUMP', [{ x: 0, y: 50 }, { x: 50, y: 30 }]); $('curveList').appendChild(r); r._ed._redraw(); });
+$('btnAddControl').addEventListener('click', () => { $('controlList').appendChild(controlRow({ link: (state.net.links[0] || {}).id || '', action: 'OPEN', setting: 0, cond: 'NODE', node: (state.net.nodes[0] || {}).id || '', op: 'BELOW', value: 0, clock: '06:00' })); });
 $('btnData').addEventListener('click', openData);
-$('btnCloseData').addEventListener('click', () => $('dataModal').hidden = true);
+$('btnCloseData').addEventListener('click', () => { $('dataModal').hidden = true; });
 $('btnApplyData').addEventListener('click', applyData);
 
 /* ============================ simulation ============================ */
@@ -893,22 +1211,30 @@ function showResults() {
   const slider = $('timeSlider'); slider.max = state.results.times.length - 1; slider.value = 0;
   if (state.results.units.quality) { $('nodeColor').querySelector('option[value=quality]').disabled = false; }
   else { $('nodeColor').querySelector('option[value=quality]').disabled = true; if (state.nodeColor === 'quality') { state.nodeColor = 'pressure'; $('nodeColor').value = 'pressure'; } }
-  updateTimeUI(); renderTables(); renderLegend(); buildPropsForm(); render();
+  updateTimeUI(); renderTables(); syncColorUI(); renderLegend(); buildPropsForm(); resize();
   $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
 }
 function clearResults() {
   state.results = null; state.resNode = {}; state.resLink = {}; state.playing = false; state.stale = false;
   $('resultBar').hidden = true; $('resultsPanel').hidden = true; updateRunButton();
-  stopPlay(); render();
+  stopPlay(); resize();
 }
 function updateTimeUI() {
   const sec = state.results.times[state.timeIndex];
   $('timeLabel').textContent = 't = ' + clock(sec);
   $('timeSlider').value = state.timeIndex;
+  if (!$('canvasTip').hidden && state.hover) updateTip(state.hover, state.mouse.sx, state.mouse.sy);
+  redrawChartIfOpen();
 }
 $('timeSlider').addEventListener('input', e => { state.timeIndex = +e.target.value; updateTimeUI(); renderTables(); renderLegend(); buildPropsForm(); render(); });
 $('nodeColor').addEventListener('change', e => { state.nodeColor = e.target.value; renderLegend(); render(); });
 $('linkColor').addEventListener('change', e => { state.linkColor = e.target.value; renderLegend(); render(); });
+$('chkColorByValue').addEventListener('change', e => { state.colorByValue = e.target.checked; syncColorUI(); renderLegend(); render(); });
+function syncColorUI() {
+  $('chkColorByValue').checked = state.colorByValue;
+  $('nodeColor').disabled = !state.colorByValue;
+  $('linkColor').disabled = !state.colorByValue;
+}
 $('btnCloseResults').addEventListener('click', clearResults);
 
 let playTimer = null;
@@ -925,6 +1251,7 @@ $('btnPlay').addEventListener('click', togglePlay);
 
 function renderLegend() {
   const el = $('legend'); if (!state.results) { el.innerHTML = ''; return; }
+  if (!state.colorByValue) { el.innerHTML = `<span>${esc(t('rb.legendType'))}</span>`; return; }
   const u = state.results.units;
   const nr = metricRange(state.results.nodes, state.nodeColor);
   const unit = state.nodeColor === 'pressure' ? u.pressure : state.nodeColor === 'head' ? u.head : state.nodeColor === 'demand' ? u.flow : u.quality;
@@ -981,6 +1308,93 @@ function highlightTableRow() {
   });
 }
 
+/* ============================ results export & chart ============================ */
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function exportCsv() {
+  if (!state.results) { toast(t('chart.noResults'), 'err'); return; }
+  const u = state.results.units, times = state.results.times;
+  const rows = [['kind', 'id', 'type', 'time_s',
+    'pressure_' + u.pressure, 'head_' + u.head, 'demand_' + u.flow, 'quality' + (u.quality ? '_' + u.quality : ''),
+    'flow_' + u.flow, 'velocity_' + u.velocity, 'headloss_' + u.headloss, 'status'].join(',')];
+  const num = v => (typeof v === 'number' && isFinite(v)) ? v : '';
+  state.results.nodes.forEach(n => times.forEach((sec, i) => {
+    rows.push(['node', csvCell(n.id), n.type, sec,
+      num(n.pressure[i]), num(n.head[i]), num(n.demand[i]), num(n.quality ? n.quality[i] : ''),
+      '', '', '', ''].join(','));
+  }));
+  state.results.links.forEach(l => times.forEach((sec, i) => {
+    rows.push(['link', csvCell(l.id), l.type, sec,
+      '', '', '', '',
+      num(l.flow[i]), num(l.velocity[i]), num(l.headloss[i]), num(l.status[i])].join(','));
+  }));
+  download(rows.join('\r\n'), 'epanet-results.csv', 'text/csv;charset=utf-8');
+}
+function chartSeries() {
+  if (!state.sel || !state.results) return null;
+  const isNode = state.sel.kind === 'node';
+  const rs = isNode ? state.resNode[state.sel.id] : state.resLink[state.sel.id];
+  if (!rs) return null;
+  let metric = isNode ? state.nodeColor : state.linkColor;
+  if (metric === 'status' || !rs[metric]) metric = isNode ? 'pressure' : 'flow';
+  const u = state.results.units;
+  const unit = metric === 'pressure' ? u.pressure : metric === 'head' ? u.head
+    : (metric === 'demand' || metric === 'flow') ? u.flow : metric === 'velocity' ? u.velocity
+    : metric === 'headloss' ? u.headloss : metric === 'quality' ? (u.quality || '') : '';
+  return { id: state.sel.id, metric, values: rs[metric], unit };
+}
+function openChart() {
+  if (!state.results) { toast(t('chart.noResults'), 'err'); return; }
+  if (!chartSeries()) { toast(t('chart.noSel'), 'err'); return; }
+  $('chartModal').hidden = false;
+  drawChart();
+}
+function drawChart() {
+  const s = chartSeries(); if (!s) return;
+  $('chartTitle').textContent = s.id + ' · ' + labelFor(s.metric) + (s.unit ? ' (' + s.unit + ')' : '');
+  const cv = $('chartCanvas'), p = pal();
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || 480, H = cv.clientHeight || 280;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+  const vals = s.values, times = state.results.times, n = vals.length;
+  let min = Infinity, max = -Infinity;
+  vals.forEach(v => { if (typeof v === 'number' && isFinite(v)) { if (v < min) min = v; if (v > max) max = v; } });
+  if (!isFinite(min)) { min = 0; max = 1; }
+  if (min === max) { min -= 1; max += 1; }
+  const padL = 52, padR = 14, padT = 14, padB = 28;
+  const pw = Math.max(1, W - padL - padR), ph = Math.max(1, H - padT - padB);
+  const X = i => padL + (n > 1 ? (i / (n - 1)) * pw : pw / 2);
+  const Y = v => padT + ph - ((v - min) / (max - min)) * ph;
+  c.font = '11px system-ui, sans-serif'; c.lineWidth = 1;
+  const gy = 4;
+  for (let g = 0; g <= gy; g++) {
+    const v = min + (max - min) * (g / gy), y = Y(v);
+    c.strokeStyle = p.grid; c.beginPath(); c.moveTo(padL, y); c.lineTo(W - padR, y); c.stroke();
+    c.fillStyle = p.labelDim; c.textAlign = 'right'; c.textBaseline = 'middle'; c.fillText(fmt(v), padL - 6, y);
+  }
+  const nx = Math.min(6, n);
+  c.textAlign = 'center'; c.textBaseline = 'top'; c.fillStyle = p.labelDim;
+  for (let k = 0; k < nx; k++) {
+    const i = nx > 1 ? Math.round(k * (n - 1) / (nx - 1)) : 0;
+    c.fillText(clock(times[i]), X(i), H - padB + 6);
+  }
+  c.strokeStyle = p.sel; c.lineWidth = 2; c.lineJoin = 'round'; c.beginPath();
+  vals.forEach((v, i) => { const x = X(i), y = Y(v); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+  c.stroke();
+  const ti = Math.max(0, Math.min(n - 1, state.timeIndex)), mx = X(ti), my = Y(vals[ti]);
+  c.strokeStyle = p.hover; c.lineWidth = 1; c.beginPath(); c.moveTo(mx, padT); c.lineTo(mx, H - padB); c.stroke();
+  c.fillStyle = p.sel; c.beginPath(); c.arc(mx, my, 3.5, 0, Math.PI * 2); c.fill();
+}
+function redrawChartIfOpen() { if (!$('chartModal').hidden) drawChart(); }
+$('btnExportCsv').addEventListener('click', exportCsv);
+$('btnChart').addEventListener('click', openChart);
+$('btnCloseChart').addEventListener('click', () => { $('chartModal').hidden = true; });
+$('btnCloseChart2').addEventListener('click', () => { $('chartModal').hidden = true; });
+$('chartModal').addEventListener('click', e => { if (e.target === $('chartModal')) $('chartModal').hidden = true; });
+
 /* ============================ file ops ============================ */
 async function loadExample() {
   try { const net = await api('/api/example'); loadNetwork(net); fitView(); toast(t('toast.exampleLoaded'), 'ok'); }
@@ -997,6 +1411,7 @@ function loadNetwork(net) {
   net.nodes.forEach(n => { n.vertices = n.vertices || []; });
   net.links.forEach(l => { l.vertices = l.vertices || []; });
   state.net = net; select(null); clearResults(); buildSettings(); renderElemList(); syncMapUI(); render(); autosave();
+  resetHistory();
 }
 function newNetwork() { loadNetwork(emptyNetwork()); fitView(); toast(t('toast.newNet')); }
 
@@ -1070,22 +1485,340 @@ function updateRunButton() {
   btn.textContent = (state.results && state.stale) ? t('btn.rerun') : t('btn.run');
 }
 function refreshLangUI() {
-  updateEngineBadge(); updateRunButton();
+  updateEngineBadge(); updateRunButton(); updateThemeBtn();
   setTool(state.tool); renderElemList(); buildPropsForm(); buildSettings();
   if (!$('mapPanel').hidden) buildMapPanel();
+  if (!$('reviewModal').hidden) { state.review = reviewNetwork(); renderReview(); }
+  if (!$('gisModal').hidden) renderGisModal();
+  if (!$('dataModal').hidden) redrawEditors();
   updateAttribution();
   if (state.results) {
     renderTables(); renderLegend(); updateTimeUI();
     $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
+    redrawChartIfOpen();
   }
 }
 $('langSelect').value = LANG;
 $('langSelect').addEventListener('change', e => setLang(e.target.value));
 document.addEventListener('langchange', () => { $('langSelect').value = LANG; refreshLangUI(); });
 
+/* ============================ theme ============================ */
+try {
+  const saved = localStorage.getItem('epanet-web-theme');
+  if (saved === 'dark' || saved === 'light') state.theme = saved;
+  else if (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) state.theme = 'dark';
+} catch (e) {}
+document.documentElement.dataset.theme = state.theme;
+
+function updateThemeBtn() {
+  const btn = $('btnTheme');
+  const dark = state.theme === 'dark';
+  btn.textContent = dark ? '☀' : '☾';
+  btn.title = t(dark ? 'theme.toLight' : 'theme.toDark');
+}
+function applyTheme() {
+  document.documentElement.dataset.theme = state.theme;
+  updateThemeBtn();
+  try { localStorage.setItem('epanet-web-theme', state.theme); } catch (e) {}
+  renderElemList();
+  render();
+  redrawChartIfOpen();
+  redrawEditors();
+}
+$('btnTheme').addEventListener('click', () => {
+  state.theme = state.theme === 'dark' ? 'light' : 'dark';
+  applyTheme();
+});
+
+/* ============================ network review ============================ */
+function rvDeleteNode(id) {
+  state.net.nodes = state.net.nodes.filter(n => n.id !== id);
+  state.net.links = state.net.links.filter(l => l.from !== id && l.to !== id);
+}
+function rvDeleteLink(id) { state.net.links = state.net.links.filter(l => l.id !== id); }
+function reviewNetwork() {
+  const net = state.net, issues = [];
+  const add = (sev, key, args, target, fix) => issues.push({ sev, msg: t(key, ...(args || [])), target: target || null, fix: fix || null });
+  const nodeIds = new Set(net.nodes.map(n => n.id));
+  const deg = {}; net.nodes.forEach(n => deg[n.id] = 0);
+  net.links.forEach(l => { if (deg[l.from] !== undefined) deg[l.from]++; if (deg[l.to] !== undefined) deg[l.to]++; });
+  const seenN = new Set(), seenL = new Set();
+  net.nodes.forEach(n => {
+    if (seenN.has(n.id)) add('error', 'review.dupNodeId', [n.id], { kind: 'node', id: n.id }, () => { n.id = genId('J', state.net.nodes); });
+    seenN.add(n.id);
+  });
+  net.links.forEach(l => {
+    if (seenL.has(l.id)) add('error', 'review.dupLinkId', [l.id], { kind: 'link', id: l.id }, () => { l.id = genId('P', state.net.links); });
+    seenL.add(l.id);
+  });
+  net.links.forEach(l => {
+    if (!nodeIds.has(l.from) || !nodeIds.has(l.to)) add('error', 'review.dangling', [l.id], { kind: 'link', id: l.id }, () => rvDeleteLink(l.id));
+  });
+  if (!net.nodes.some(n => n.type === 'RESERVOIR' || n.type === 'TANK')) add('error', 'review.noSource', [], null, null);
+  net.nodes.forEach(n => {
+    if (deg[n.id] === 0) {
+      const src = n.type === 'RESERVOIR' || n.type === 'TANK';
+      add('warn', src ? 'review.orphanSource' : 'review.orphan', [n.id], { kind: 'node', id: n.id }, () => rvDeleteNode(n.id));
+    }
+    if (n.elevation < 0) add('warn', 'review.negElev', [n.id], { kind: 'node', id: n.id }, () => { n.elevation = 0; });
+  });
+  const pair = {};
+  net.links.forEach(l => {
+    const k = [l.from, l.to].sort().join('|');
+    pair[k] = (pair[k] || 0) + 1;
+    if (pair[k] > 1) add('warn', 'review.parallel', [l.id], { kind: 'link', id: l.id }, () => rvDeleteLink(l.id));
+    if (l.type !== 'PUMP' && l.diameter <= 0) add('error', 'review.badDiam', [l.id], { kind: 'link', id: l.id }, () => { l.diameter = 200; });
+    if (l.type === 'PIPE' && l.length <= 0) add('error', 'review.badLength', [l.id], { kind: 'link', id: l.id }, () => { l.length = 300; });
+  });
+  // connected components without a source
+  const adj = {}; net.nodes.forEach(n => adj[n.id] = []);
+  net.links.forEach(l => { if (adj[l.from] && adj[l.to]) { adj[l.from].push(l.to); adj[l.to].push(l.from); } });
+  const seen = new Set();
+  net.nodes.forEach(start => {
+    if (seen.has(start.id)) return;
+    const comp = [], stack = [start.id]; seen.add(start.id);
+    while (stack.length) { const id = stack.pop(); comp.push(id); (adj[id] || []).forEach(nb => { if (!seen.has(nb)) { seen.add(nb); stack.push(nb); } }); }
+    if (comp.length < 2) return;
+    const hasSrc = comp.some(id => { const n = nodeById(id); return n && (n.type === 'RESERVOIR' || n.type === 'TANK'); });
+    if (!hasSrc) add('warn', 'review.unsupplied', [comp.length], { kind: 'node', id: comp[0] }, null);
+  });
+  return issues;
+}
+function openReview() { state.review = reviewNetwork(); renderReview(); $('reviewModal').hidden = false; }
+function renderReview() {
+  const issues = state.review || [];
+  const errs = issues.filter(i => i.sev === 'error').length, warns = issues.filter(i => i.sev === 'warn').length;
+  $('reviewSummary').textContent = issues.length ? t('review.summary', errs, warns) : '';
+  const list = $('reviewList'); list.innerHTML = '';
+  if (!issues.length) list.innerHTML = `<div class="review-empty">${esc(t('review.empty'))}</div>`;
+  issues.forEach(it => {
+    const row = document.createElement('div'); row.className = 'review-item ' + it.sev;
+    const msg = document.createElement('span'); msg.className = 'msg'; msg.textContent = it.msg; row.appendChild(msg);
+    if (it.target) { const b = document.createElement('button'); b.className = 'btn btn-sm'; b.textContent = t('review.locate'); b.addEventListener('click', () => { $('reviewModal').hidden = true; select(it.target); centerOn(selObj()); }); row.appendChild(b); }
+    if (it.fix) { const f = document.createElement('button'); f.className = 'btn btn-sm'; f.textContent = t('review.fix'); f.addEventListener('click', () => { it.fix(); afterFix(); }); row.appendChild(f); }
+    list.appendChild(row);
+  });
+  $('btnFixAll').disabled = !issues.some(i => i.fix);
+}
+function afterFix() { markDirty(true); renderElemList(); buildPropsForm(); render(); state.review = reviewNetwork(); renderReview(); }
+function fixAll() { (state.review || []).filter(i => i.fix).forEach(i => i.fix()); afterFix(); }
+$('btnReview').addEventListener('click', openReview);
+$('btnCloseReview').addEventListener('click', () => { $('reviewModal').hidden = true; });
+$('btnCloseReview2').addEventListener('click', () => { $('reviewModal').hidden = true; });
+$('btnFixAll').addEventListener('click', fixAll);
+$('reviewModal').addEventListener('click', e => { if (e.target === $('reviewModal')) $('reviewModal').hidden = true; });
+
+/* ============================ undo / redo wiring ============================ */
+$('btnUndo').addEventListener('click', undo);
+$('btnRedo').addEventListener('click', redo);
+document.addEventListener('keydown', e => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const k = e.key.toLowerCase();
+    if (k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+    else if (k === 'y') { e.preventDefault(); redo(); }
+  }
+});
+
+/* ============================ GIS import ============================ */
+let gisData = null;
+const gisMap = { id: '', type: '', elev: '', demand: '', lon: '', lat: '' };
+function csvParse(text) {
+  const rows = []; let row = [], cur = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else inQ = false; } else cur += ch; }
+    else if (ch === '"') inQ = true;
+    else if (ch === ',') { row.push(cur); cur = ''; }
+    else if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+    else if (ch !== '\r') cur += ch;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+function guessLon(h) { return h.find(k => /^(lon|lng|long|longitude)$/i.test(k)) || h.find(k => /lon|lng/i.test(k)) || ''; }
+function guessLat(h) { return h.find(k => /^(lat|latitude)$/i.test(k)) || h.find(k => /lat/i.test(k)) || ''; }
+function parseGis(name, text) {
+  if (/\.csv$/i.test(name)) {
+    const rows = csvParse(text);
+    if (rows.length < 2) throw new Error('empty CSV');
+    const header = rows[0].map(h => h.trim());
+    const points = rows.slice(1).map(r => { const props = {}; header.forEach((h, i) => props[h] = r[i] !== undefined ? r[i].trim() : ''); return { props }; });
+    return { kind: 'csv', points, lines: [], fields: header };
+  }
+  const gj = JSON.parse(text);
+  const feats = gj.type === 'FeatureCollection' ? (gj.features || []) : gj.type === 'Feature' ? [gj] : [{ type: 'Feature', geometry: gj, properties: {} }];
+  const points = [], lines = [], fieldSet = new Set();
+  feats.forEach(f => {
+    const g = f.geometry; if (!g) return;
+    const props = f.properties || {}; Object.keys(props).forEach(k => fieldSet.add(k));
+    if (g.type === 'Point') points.push({ lon: g.coordinates[0], lat: g.coordinates[1], props });
+    else if (g.type === 'MultiPoint') g.coordinates.forEach(c => points.push({ lon: c[0], lat: c[1], props }));
+    else if (g.type === 'LineString') lines.push({ coords: g.coordinates, props });
+    else if (g.type === 'MultiLineString') g.coordinates.forEach(c => lines.push({ coords: c, props }));
+  });
+  return { kind: 'geojson', points, lines, fields: [...fieldSet] };
+}
+function ptLonLat(p) {
+  if (gisData.kind === 'csv') return [parseFloat(p.props[gisMap.lon]), parseFloat(p.props[gisMap.lat])];
+  return [p.lon, p.lat];
+}
+function gisNum(v) { const n = parseFloat(v); return isFinite(n) ? n : 0; }
+function nodeTypeFrom(v) { const s = String(v || '').toLowerCase(); if (/reservoir|source|水库/.test(s)) return 'RESERVOIR'; if (/tank|水池|水塔/.test(s)) return 'TANK'; return 'JUNCTION'; }
+function linkTypeFrom(v) { const s = String(v || '').toUpperCase(); if (/PUMP|泵/.test(s)) return 'PUMP'; const vlv = VALVE_TYPES.find(x => s.includes(x)); if (vlv) return vlv; if (/VALVE|阀/.test(s)) return 'PRV'; return 'PIPE'; }
+function uniqId(base, prefix, arr) { let id = base || genId(prefix, arr); let i = 2; while (arr.some(x => x.id === id)) id = (base || prefix) + '_' + (i++); return id; }
+function openGis(name, text) {
+  let data;
+  try { data = parseGis(name, text); } catch (e) { toast(t('gis.errParse') + e.message, 'err'); return; }
+  if (!data.points.length && !data.lines.length) { toast(t('gis.errNoPoints'), 'err'); return; }
+  data.name = name; gisData = data;
+  const f = data.fields, pick = re => f.find(k => re.test(k)) || '';
+  gisMap.id = pick(/^(id|name|node_id|link_id|gid|fid|objectid)$/i) || pick(/id|name/i);
+  gisMap.type = pick(/^(type|kind|category|node_type|link_type)$/i) || pick(/type|kind/i);
+  gisMap.elev = pick(/^(elev|elevation|z|alt|altitude|height)$/i) || pick(/elev|alt|height/i);
+  gisMap.demand = pick(/^(demand|base_demand)$/i) || pick(/demand/i);
+  if (data.kind === 'csv') { gisMap.lon = guessLon(f); gisMap.lat = guessLat(f); }
+  renderGisModal();
+  $('gisModal').hidden = false;
+}
+function renderGisModal() {
+  const body = $('gisBody'); body.innerHTML = '';
+  const d = gisData; if (!d) return;
+  const sum = document.createElement('div'); sum.className = 'rp-summary';
+  sum.textContent = d.name + ' · ' + t('gis.summary', d.points.length, d.lines.length);
+  body.appendChild(sum);
+  const hint = document.createElement('div'); hint.className = 'map-hint'; hint.textContent = t('gis.hint'); body.appendChild(hint);
+  const optFields = [['', t('gis.auto')], ...d.fields.map(f => [f, f])];
+  const addRow = (label, key, opts) => body.appendChild(field(label, selectInput(gisMap[key], opts, v => { gisMap[key] = v; })));
+  if (d.kind === 'csv') {
+    addRow(t('gis.mapLon'), 'lon', d.fields.map(f => [f, f]));
+    addRow(t('gis.mapLat'), 'lat', d.fields.map(f => [f, f]));
+  }
+  addRow(t('gis.mapId'), 'id', optFields);
+  addRow(t('gis.mapType'), 'type', optFields);
+  addRow(t('gis.mapElev'), 'elev', optFields);
+  addRow(t('gis.mapDemand'), 'demand', optFields);
+}
+function applyGis() {
+  const d = gisData; if (!d) return;
+  const net = emptyNetwork();
+  net.title = d.name.replace(/\.[^.]+$/, '');
+  const pts = d.points.map(p => ({ p, ll: ptLonLat(p) })).filter(o => isFinite(o.ll[0]) && isFinite(o.ll[1]));
+  const anchor = pts.length ? pts[0].ll : (d.lines.length ? d.lines[0].coords[0] : [0, 0]);
+  net.geo = { ...defaultGeo(), enabled: true, lon: anchor[0], lat: anchor[1], ax: 0, ay: 0, scale: 1, rot: 0, anchorNode: '' };
+  const oldGeo = state.net.geo; state.net.geo = net.geo;
+  const toXY = (lon, lat) => { const [x, y] = mercToNet(lonToMx(lon), latToMy(lat)); return [Math.round(x * 100) / 100, Math.round(y * 100) / 100]; };
+  const nodes = [], links = [];
+  const mkNode = (type, xy, props) => {
+    const prefix = type === 'RESERVOIR' ? 'R' : type === 'TANK' ? 'T' : 'J';
+    const id = uniqId(gisMap.id ? String(props[gisMap.id] || '').trim() : '', prefix, nodes);
+    const n = { id, type, x: xy[0], y: xy[1], elevation: gisNum(props[gisMap.elev]), demand: gisNum(props[gisMap.demand]), demandPattern: '', head: 50, headPattern: '', initLevel: 5, minLevel: 0, maxLevel: 10, diameter: 20, minVol: 0, volCurve: '', initQual: 0 };
+    nodes.push(n); return n;
+  };
+  pts.forEach(o => mkNode(nodeTypeFrom(gisMap.type ? o.p.props[gisMap.type] : ''), toXY(o.ll[0], o.ll[1]), o.p.props || {}));
+  const findNode = xy => nodes.find(n => Math.abs(n.x - xy[0]) < 0.5 && Math.abs(n.y - xy[1]) < 0.5);
+  d.lines.forEach(ln => {
+    const c = ln.coords; if (!c || c.length < 2) return;
+    const a = toXY(c[0][0], c[0][1]), b = toXY(c[c.length - 1][0], c[c.length - 1][1]);
+    const na = findNode(a) || mkNode('JUNCTION', a, {});
+    const nb = findNode(b) || mkNode('JUNCTION', b, {});
+    if (na.id === nb.id) return;
+    if (links.some(l => (l.from === na.id && l.to === nb.id) || (l.from === nb.id && l.to === na.id))) return;
+    const verts = c.slice(1, -1).map(cc => { const [x, y] = toXY(cc[0], cc[1]); return { x, y }; });
+    const all = [a, ...verts.map(v => [v.x, v.y]), b]; let len = 0;
+    for (let i = 1; i < all.length; i++) len += Math.hypot(all[i][0] - all[i - 1][0], all[i][1] - all[i - 1][1]);
+    const props = ln.props || {};
+    const type = linkTypeFrom(gisMap.type ? props[gisMap.type] : '');
+    const prefix = type === 'PUMP' ? 'PUMP' : VALVE_TYPES.includes(type) ? 'V' : 'P';
+    const id = uniqId(gisMap.id ? String(props[gisMap.id] || '').trim() : '', prefix, links);
+    links.push({ id, type, from: na.id, to: nb.id, length: Math.max(1, Math.round(len)), diameter: 200, roughness: 100, minorLoss: 0, status: 'OPEN', power: 0, headCurve: '', speed: 1, speedPattern: '', setting: 20, vertices: verts });
+  });
+  state.net.geo = oldGeo;
+  net.nodes = nodes; net.links = links;
+  loadNetwork(net); fitView(); syncMapUI();
+  $('gisModal').hidden = true;
+  toast(t('gis.done', nodes.length, links.length), 'ok');
+}
+$('btnGis').addEventListener('click', () => $('fileGis').click());
+$('fileGis').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { openGis(f.name, await f.text()); } catch (err) { toast(t('gis.errParse') + err.message, 'err'); }
+  e.target.value = '';
+});
+$('btnGisImport').addEventListener('click', applyGis);
+$('btnCloseGis').addEventListener('click', () => { $('gisModal').hidden = true; });
+$('btnCloseGis2').addEventListener('click', () => { $('gisModal').hidden = true; });
+$('gisModal').addEventListener('click', e => { if (e.target === $('gisModal')) $('gisModal').hidden = true; });
+
+/* ============================ DEM auto-elevation ============================ */
+const DEM_Z = 12;
+const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const demCache = new Map();
+function demTile(lon, lat, z) {
+  const n = 1 << z;
+  const xr = (lon + 180) / 360 * n;
+  const latR = lat * Math.PI / 180;
+  const yr = (1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n;
+  const x = Math.floor(xr), y = Math.floor(yr);
+  return { x, y, px: (xr - x) * 256, py: (yr - y) * 256 };
+}
+function loadDemTile(z, x, y) {
+  const key = z + '/' + x + '/' + y;
+  if (demCache.has(key)) return demCache.get(key);
+  const pr = new Promise((res, rej) => {
+    const img = new Image(); img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const cv = document.createElement('canvas'); cv.width = 256; cv.height = 256;
+        const c = cv.getContext('2d'); c.drawImage(img, 0, 0);
+        res(c.getImageData(0, 0, 256, 256).data);
+      } catch (e) { rej(e); }
+    };
+    img.onerror = () => rej(new Error('tile ' + key));
+    img.src = DEM_URL.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+  });
+  demCache.set(key, pr);
+  pr.catch(() => demCache.delete(key));
+  return pr;
+}
+function demElev(data, px, py) {
+  const x = Math.max(0, Math.min(255, Math.floor(px))), y = Math.max(0, Math.min(255, Math.floor(py)));
+  const i = (y * 256 + x) * 4;
+  return (data[i] * 256 + data[i + 1] + data[i + 2] / 256) - 32768;
+}
+let demBusy = false;
+function updateDemButtons() { document.querySelectorAll('[data-dem]').forEach(b => { b.disabled = demBusy; }); }
+function demButton(scope) {
+  const b = document.createElement('button'); b.className = 'btn btn-sm'; b.dataset.dem = scope; b.textContent = t('dem.btn');
+  b.addEventListener('click', () => demApply(scope === 'sel' ? (selObj() ? [selObj()] : []) : state.net.nodes));
+  return b;
+}
+async function demApply(nodes) {
+  if (demBusy) return;
+  if (!mapOn()) { toast(t('dem.needGeo'), 'err'); return; }
+  const targets = nodes.filter(n => n.type === 'JUNCTION' || n.type === 'TANK');
+  if (!targets.length) { toast(t('dem.noTarget'), 'err'); return; }
+  demBusy = true; updateDemButtons();
+  toast(t('dem.running'));
+  try {
+    let done = 0;
+    for (const n of targets) {
+      const [mx, my] = netToMerc(n.x, n.y);
+      const tl = demTile(mxToLon(mx), myToLat(my), DEM_Z);
+      const data = await loadDemTile(DEM_Z, tl.x, tl.y);
+      n.elevation = Math.round(demElev(data, tl.px, tl.py) * 10) / 10;
+      done++;
+    }
+    markDirty(false); render(); buildPropsForm();
+    toast(t('dem.done', done), 'ok');
+  } catch (e) { toast(t('dem.err') + e.message, 'err'); }
+  finally { demBusy = false; updateDemButtons(); }
+}
+
 /* ============================ init ============================ */
 async function init() {
-  buildSettings(); renderElemList(); updateRunButton(); syncMapUI();
+  buildSettings(); renderElemList(); updateRunButton(); syncMapUI(); syncColorUI(); updateThemeBtn();
   try {
     const h = await api('/api/health');
     state.engineVersion = h.version;

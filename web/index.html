@@ -18,6 +18,9 @@
   <div class="engine-badge" id="engineBadge">引擎检测中…</div>
   <div class="spacer"></div>
   <div class="actions">
+    <button class="btn btn-icon" id="btnUndo" data-i18n-title="btn.undo" title="撤销 (Ctrl+Z)" disabled>↶</button>
+    <button class="btn btn-icon" id="btnRedo" data-i18n-title="btn.redo" title="重做 (Ctrl+Shift+Z)" disabled>↷</button>
+    <button class="btn btn-icon" id="btnTheme" title="切换暗色模式">☾</button>
     <select id="langSelect" class="lang-select" title="Language / 语言">
       <option value="zh">中文</option>
       <option value="en">English</option>
@@ -27,13 +30,19 @@
     <button class="btn" id="btnOpen" data-i18n="btn.open">打开工程</button>
     <button class="btn" id="btnSave" data-i18n="btn.save">保存工程</button>
     <button class="btn" id="btnImport" data-i18n="btn.import">导入 INP</button>
+    <button class="btn" id="btnGis" data-i18n="btn.gis">导入 GIS</button>
     <button class="btn" id="btnExport" data-i18n="btn.export">导出 INP</button>
     <button class="btn" id="btnData" data-i18n="btn.data">模式/曲线/控制</button>
+    <button class="btn" id="btnReview" data-i18n="btn.review">检查</button>
     <button class="btn btn-run" id="btnRun">▶ 运行模拟</button>
   </div>
 </header>
 
 <div class="resultbar" id="resultBar" hidden>
+  <label class="rb-group rb-color">
+    <input type="checkbox" id="chkColorByValue">
+    <span data-i18n="rb.colorByValue">数值着色</span>
+  </label>
   <div class="rb-group">
     <label data-i18n="rb.nodeColor">节点着色</label>
     <select id="nodeColor">
@@ -59,6 +68,8 @@
   </div>
   <div class="rb-legend" id="legend"></div>
   <div class="spacer"></div>
+  <button class="btn" id="btnExportCsv" data-i18n="rb.exportCsv">导出 CSV</button>
+  <button class="btn" id="btnChart" data-i18n="rb.chart">图表</button>
   <button class="btn" id="btnCloseResults" data-i18n="btn.closeResults">关闭结果</button>
 </div>
 
@@ -109,6 +120,7 @@
     <div class="map-panel" id="mapPanel" hidden></div>
     <div class="map-attribution" id="mapAttribution" hidden></div>
     <div class="coord-readout" id="coordReadout"></div>
+    <div class="canvas-tip" id="canvasTip" hidden></div>
   </section>
 
   <aside class="right">
@@ -159,8 +171,8 @@
         <div id="curveList"></div>
       </div>
       <div class="data-section">
-        <div class="data-head"><span data-i18n="data.controls">控制规则（每行一条 EPANET 简单控制）</span></div>
-        <textarea id="controlsText" rows="5" placeholder="LINK PUMP1 OPEN IF NODE T1 BELOW 6"></textarea>
+        <div class="data-head"><span data-i18n="data.controls">控制规则（结构化构建）</span><button class="btn btn-sm" id="btnAddControl" data-i18n="ctl.add">+ 添加规则</button></div>
+        <div id="controlList"></div>
       </div>
     </div>
     <div class="modal-foot">
@@ -171,6 +183,50 @@
 
 <input type="file" id="fileInp" accept=".inp,.txt" hidden>
 <input type="file" id="fileJson" accept=".json" hidden>
+<input type="file" id="fileGis" accept=".geojson,.json,.csv" hidden>
+<div class="modal-overlay" id="reviewModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <span data-i18n="review.title">管网检查</span>
+      <button class="btn btn-icon" id="btnCloseReview">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="rp-summary" id="reviewSummary"></div>
+      <div id="reviewList"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btnFixAll" data-i18n="review.fixAll">全部修复</button>
+      <button class="btn" id="btnCloseReview2" data-i18n="btn.close">关闭</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay" id="chartModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <span id="chartTitle">—</span>
+      <button class="btn btn-icon" id="btnCloseChart">✕</button>
+    </div>
+    <div class="modal-body">
+      <canvas id="chartCanvas" style="width:100%;height:280px;display:block;"></canvas>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btnCloseChart2" data-i18n="btn.close">关闭</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay" id="gisModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <span data-i18n="gis.title">GIS 导入（GeoJSON / CSV）</span>
+      <button class="btn btn-icon" id="btnCloseGis">✕</button>
+    </div>
+    <div class="modal-body" id="gisBody"></div>
+    <div class="modal-foot">
+      <button class="btn btn-run" id="btnGisImport" data-i18n="gis.import">导入</button>
+      <button class="btn" id="btnCloseGis2" data-i18n="btn.close">关闭</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast" hidden></div>
 
 <script src="i18n.js"></script>
