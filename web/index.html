@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>管网水力模拟 · EPANET Web</title>
+<title data-i18n="app.title">管网水力模拟 · EPANET Web</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,41 +11,45 @@
   <div class="brand">
     <span class="logo">💧</span>
     <div>
-      <div class="title">管网水力模拟</div>
-      <div class="subtitle">EPANET Web · Go 引擎</div>
+      <div class="title" data-i18n="brand.title">管网水力模拟</div>
+      <div class="subtitle" data-i18n="brand.subtitle">EPANET Web · Go 引擎</div>
     </div>
   </div>
   <div class="engine-badge" id="engineBadge">引擎检测中…</div>
   <div class="spacer"></div>
   <div class="actions">
-    <button class="btn" id="btnExample">示例管网</button>
-    <button class="btn" id="btnNew">新建</button>
-    <button class="btn" id="btnOpen">打开工程</button>
-    <button class="btn" id="btnSave">保存工程</button>
-    <button class="btn" id="btnImport">导入 INP</button>
-    <button class="btn" id="btnExport">导出 INP</button>
-    <button class="btn" id="btnData">模式/曲线/控制</button>
+    <select id="langSelect" class="lang-select" title="Language / 语言">
+      <option value="zh">中文</option>
+      <option value="en">English</option>
+    </select>
+    <button class="btn" id="btnExample" data-i18n="btn.example">示例管网</button>
+    <button class="btn" id="btnNew" data-i18n="btn.new">新建</button>
+    <button class="btn" id="btnOpen" data-i18n="btn.open">打开工程</button>
+    <button class="btn" id="btnSave" data-i18n="btn.save">保存工程</button>
+    <button class="btn" id="btnImport" data-i18n="btn.import">导入 INP</button>
+    <button class="btn" id="btnExport" data-i18n="btn.export">导出 INP</button>
+    <button class="btn" id="btnData" data-i18n="btn.data">模式/曲线/控制</button>
     <button class="btn btn-run" id="btnRun">▶ 运行模拟</button>
   </div>
 </header>
 
 <div class="resultbar" id="resultBar" hidden>
   <div class="rb-group">
-    <label>节点着色</label>
+    <label data-i18n="rb.nodeColor">节点着色</label>
     <select id="nodeColor">
-      <option value="pressure">压力</option>
-      <option value="head">水头</option>
-      <option value="demand">需水量</option>
-      <option value="quality">水质</option>
+      <option value="pressure" data-i18n="opt.pressure">压力</option>
+      <option value="head" data-i18n="opt.head">水头</option>
+      <option value="demand" data-i18n="opt.demand">需水量</option>
+      <option value="quality" data-i18n="opt.quality">水质</option>
     </select>
   </div>
   <div class="rb-group">
-    <label>管段着色</label>
+    <label data-i18n="rb.linkColor">管段着色</label>
     <select id="linkColor">
-      <option value="flow">流量</option>
-      <option value="velocity">流速</option>
-      <option value="headloss">水头损失</option>
-      <option value="status">状态</option>
+      <option value="flow" data-i18n="opt.flow">流量</option>
+      <option value="velocity" data-i18n="opt.velocity">流速</option>
+      <option value="headloss" data-i18n="opt.headloss">水头损失</option>
+      <option value="status" data-i18n="opt.status">状态</option>
     </select>
   </div>
   <div class="rb-group rb-time">
@@ -55,37 +59,37 @@
   </div>
   <div class="rb-legend" id="legend"></div>
   <div class="spacer"></div>
-  <button class="btn" id="btnCloseResults">关闭结果</button>
+  <button class="btn" id="btnCloseResults" data-i18n="btn.closeResults">关闭结果</button>
 </div>
 
 <main class="workspace">
   <aside class="left">
-    <div class="panel-title">绘图工具</div>
+    <div class="panel-title" data-i18n="tools.title">绘图工具</div>
     <div class="tools" id="tools">
-      <button class="tool active" data-tool="select" title="选择/移动 (V)">⬚ 选择</button>
-      <button class="tool" data-tool="junction" title="节点 (J)">● 节点</button>
-      <button class="tool" data-tool="reservoir" title="水库 (R)">▰ 水库</button>
-      <button class="tool" data-tool="tank" title="水池 (T)">▮ 水池</button>
-      <button class="tool" data-tool="pipe" title="管道 (P)">─ 管道</button>
-      <button class="tool" data-tool="pump" title="水泵 (M)">⊕ 水泵</button>
-      <button class="tool" data-tool="valve" title="阀门 (A)">⋈ 阀门</button>
+      <button class="tool active" data-tool="select" data-i18n="tool.select" data-i18n-title="tool.select.title" title="选择/移动 (V)">⬚ 选择</button>
+      <button class="tool" data-tool="junction" data-i18n="tool.junction" data-i18n-title="tool.junction.title" title="节点 (J)">● 节点</button>
+      <button class="tool" data-tool="reservoir" data-i18n="tool.reservoir" data-i18n-title="tool.reservoir.title" title="水库 (R)">▰ 水库</button>
+      <button class="tool" data-tool="tank" data-i18n="tool.tank" data-i18n-title="tool.tank.title" title="水池 (T)">▮ 水池</button>
+      <button class="tool" data-tool="pipe" data-i18n="tool.pipe" data-i18n-title="tool.pipe.title" title="管道 (P)">─ 管道</button>
+      <button class="tool" data-tool="pump" data-i18n="tool.pump" data-i18n-title="tool.pump.title" title="水泵 (M)">⊕ 水泵</button>
+      <button class="tool" data-tool="valve" data-i18n="tool.valve" data-i18n-title="tool.valve.title" title="阀门 (A)">⋈ 阀门</button>
     </div>
-    <div class="panel-title">图例</div>
+    <div class="panel-title" data-i18n="legend.title">图例</div>
     <div class="type-legend">
-      <div><span class="dot j"></span>节点 Junction</div>
-      <div><span class="dot r"></span>水库 Reservoir</div>
-      <div><span class="dot t"></span>水池 Tank</div>
-      <div><span class="line p"></span>管道 Pipe</div>
-      <div><span class="line m"></span>水泵 Pump</div>
-      <div><span class="line v"></span>阀门 Valve</div>
+      <div><span class="dot j"></span><span data-i18n="legend.junction">节点</span></div>
+      <div><span class="dot r"></span><span data-i18n="legend.reservoir">水库</span></div>
+      <div><span class="dot t"></span><span data-i18n="legend.tank">水池</span></div>
+      <div><span class="line p"></span><span data-i18n="legend.pipe">管道</span></div>
+      <div><span class="line m"></span><span data-i18n="legend.pump">水泵</span></div>
+      <div><span class="line v"></span><span data-i18n="legend.valve">阀门</span></div>
     </div>
     <div class="panel-title">
-      元素
+      <span data-i18n="elem.title">元素</span>
       <span class="count" id="elemCount"></span>
     </div>
     <div class="elem-tabs">
-      <button class="etab active" data-etab="nodes">节点</button>
-      <button class="etab" data-etab="links">管段</button>
+      <button class="etab active" data-etab="nodes" data-i18n="etab.nodes">节点</button>
+      <button class="etab" data-etab="links" data-i18n="etab.links">管段</button>
     </div>
     <div class="elem-list" id="elemList"></div>
   </aside>
@@ -96,18 +100,18 @@
     <div class="zoom-ctl">
       <button class="btn btn-icon" id="btnZoomIn">＋</button>
       <button class="btn btn-icon" id="btnZoomOut">－</button>
-      <button class="btn btn-icon" id="btnFit" title="适应窗口">⤢</button>
+      <button class="btn btn-icon" id="btnFit" data-i18n-title="fit.title" title="适应窗口">⤢</button>
     </div>
     <div class="coord-readout" id="coordReadout"></div>
   </section>
 
   <aside class="right">
     <div class="rtabs">
-      <button class="rtab active" data-rtab="props">属性</button>
-      <button class="rtab" data-rtab="settings">模拟设置</button>
+      <button class="rtab active" data-rtab="props" data-i18n="rtab.props">属性</button>
+      <button class="rtab" data-rtab="settings" data-i18n="rtab.settings">模拟设置</button>
     </div>
     <div class="rpanel" id="propsPanel">
-      <div class="empty-hint" id="propsEmpty">未选中元素。<br>用「选择」工具点击节点或管段查看/编辑属性。</div>
+      <div class="empty-hint" id="propsEmpty" data-i18n-html="props.empty">未选中元素。<br>用「选择」工具点击节点或管段查看/编辑属性。</div>
       <div id="propsForm"></div>
     </div>
     <div class="rpanel" id="settingsPanel" hidden></div>
@@ -117,13 +121,13 @@
 <footer class="resultspanel" id="resultsPanel" hidden>
   <div class="rp-head">
     <div class="rp-tabs">
-      <button class="rptab active" data-rptab="nodes">节点结果</button>
-      <button class="rptab" data-rptab="links">管段结果</button>
-      <button class="rptab" data-rptab="warnings"> warnings</button>
+      <button class="rptab active" data-rptab="nodes" data-i18n="rptab.nodes">节点结果</button>
+      <button class="rptab" data-rptab="links" data-i18n="rptab.links">管段结果</button>
+      <button class="rptab" data-rptab="warnings" data-i18n="rptab.warnings">警告</button>
     </div>
     <div class="spacer"></div>
     <span class="rp-summary" id="rpSummary"></span>
-    <button class="btn btn-icon" id="btnToggleResults" title="折叠/展开">▾</button>
+    <button class="btn btn-icon" id="btnToggleResults" data-i18n-title="toggle.title" title="折叠/展开">▾</button>
   </div>
   <div class="rp-body" id="rpBody">
     <div class="table-wrap" id="nodeTableWrap"></div>
@@ -136,25 +140,25 @@
 <div class="modal-overlay" id="dataModal" hidden>
   <div class="modal">
     <div class="modal-head">
-      <span>时间模式 · 数据曲线 · 控制规则</span>
+      <span data-i18n="modal.title">时间模式 · 数据曲线 · 控制规则</span>
       <button class="btn btn-icon" id="btnCloseData">✕</button>
     </div>
     <div class="modal-body">
       <div class="data-section">
-        <div class="data-head">时间模式（需水乘数，逗号分隔）<button class="btn btn-sm" id="btnAddPattern">+ 添加</button></div>
+        <div class="data-head"><span data-i18n="data.patterns">时间模式（需水乘数，逗号分隔）</span><button class="btn btn-sm" id="btnAddPattern" data-i18n="btn.add">+ 添加</button></div>
         <div id="patternList"></div>
       </div>
       <div class="data-section">
-        <div class="data-head">数据曲线（水泵扬程曲线等，每行 x,y）<button class="btn btn-sm" id="btnAddCurve">+ 添加</button></div>
+        <div class="data-head"><span data-i18n="data.curves">数据曲线（水泵扬程曲线等，每行 x,y）</span><button class="btn btn-sm" id="btnAddCurve" data-i18n="btn.add">+ 添加</button></div>
         <div id="curveList"></div>
       </div>
       <div class="data-section">
-        <div class="data-head">控制规则（每行一条 EPANET 简单控制）</div>
+        <div class="data-head"><span data-i18n="data.controls">控制规则（每行一条 EPANET 简单控制）</span></div>
         <textarea id="controlsText" rows="5" placeholder="LINK PUMP1 OPEN IF NODE T1 BELOW 6"></textarea>
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-run" id="btnApplyData">应用</button>
+      <button class="btn btn-run" id="btnApplyData" data-i18n="btn.apply">应用</button>
     </div>
   </div>
 </div>
@@ -163,6 +167,7 @@
 <input type="file" id="fileJson" accept=".json" hidden>
 <div class="toast" id="toast" hidden></div>
 
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

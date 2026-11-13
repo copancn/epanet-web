@@ -6,7 +6,7 @@ const DEFAULT_TIMES = { duration: 86400, hydStep: 3600, qualStep: 300, patternSt
 
 function emptyNetwork() {
   return {
-    title: '新建管网', nodes: [], links: [], patterns: [], curves: [], controls: [],
+    title: t('net.newTitle'), nodes: [], links: [], patterns: [], curves: [], controls: [],
     options: { ...DEFAULT_OPTIONS }, times: { ...DEFAULT_TIMES },
     quality: { type: 'NONE', chemName: 'Chlorine', chemUnits: 'mg/L', traceNode: '' },
   };
@@ -25,6 +25,7 @@ const state = {
   linkColor: 'flow',
   playing: false,
   stale: false,
+  engineStatus: 'checking', engineVersion: 0,
   elemTab: 'nodes',
   mouse: { sx: 0, sy: 0, wx: 0, wy: 0 },
   drag: null,
@@ -416,7 +417,7 @@ function addNode(tool, wx, wy) {
 }
 
 function addLink(type, from, to) {
-  if (state.net.links.some(l => (l.from === from && l.to === to) || (l.from === to && l.to === from))) { toast('两节点间已存在管段', 'err'); return; }
+  if (state.net.links.some(l => (l.from === from && l.to === to) || (l.from === to && l.to === from))) { toast(t('err.linkExists'), 'err'); return; }
   const prefix = type === 'PIPE' ? 'P' : type === 'PUMP' ? 'PUMP' : 'V';
   const l = { id: genId(prefix, state.net.links), type, from, to, length: 300, diameter: 200, roughness: 100, minorLoss: 0, status: 'OPEN', power: 0, headCurve: '', speed: 1, speedPattern: '', setting: 20, vertices: [] };
   if (type === 'PUMP') { l.power = 0; l.headCurve = state.net.curves[0] ? state.net.curves[0].id : ''; }
@@ -447,17 +448,17 @@ function select(sel) {
 function markDirty(structural) {
   if (state.results) {
     if (structural) { clearResults(); }
-    else { state.stale = true; $('btnRun').textContent = '▶ 重新运行'; }
+    else { state.stale = true; updateRunButton(); }
   }
   autosave();
 }
 
 /* ============================ tools / tabs ============================ */
-function setTool(t) {
-  state.tool = t; state.draft = null;
-  document.querySelectorAll('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
-  const hints = { select: '选择/移动元素 · 拖拽空白平移 · 滚轮缩放', junction: '点击空白处放置节点', reservoir: '点击空白处放置水库', tank: '点击空白处放置水池', pipe: '依次点击两个节点创建管道', pump: '依次点击两个节点创建水泵', valve: '依次点击两个节点创建阀门' };
-  $('canvasHint').textContent = hints[t] || '';
+function setTool(tool) {
+  state.tool = tool; state.draft = null;
+  document.querySelectorAll('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));
+  const hints = { select: t('hint.select'), junction: t('hint.junction'), reservoir: t('hint.reservoir'), tank: t('hint.tank'), pipe: t('hint.pipe'), pump: t('hint.pump'), valve: t('hint.valve') };
+  $('canvasHint').textContent = hints[tool] || '';
   render();
 }
 $('tools').addEventListener('click', e => { const b = e.target.closest('.tool'); if (b) setTool(b.dataset.tool); });
@@ -477,7 +478,7 @@ document.querySelectorAll('.rtab').forEach(b => b.addEventListener('click', () =
 function renderElemList() {
   const list = $('elemList');
   const items = state.elemTab === 'nodes' ? state.net.nodes : state.net.links;
-  $('elemCount').textContent = `${state.net.nodes.length} 节点 / ${state.net.links.length} 管段`;
+  $('elemCount').textContent = t('elem.count', state.net.nodes.length, state.net.links.length);
   list.innerHTML = '';
   items.forEach(it => {
     const kind = state.elemTab === 'nodes' ? 'node' : 'link';
@@ -489,7 +490,7 @@ function renderElemList() {
     div.addEventListener('click', () => { select({ kind, id: it.id }); centerOn(it); });
     list.appendChild(div);
   });
-  if (!items.length) list.innerHTML = '<div class="empty-hint">暂无元素</div>';
+  if (!items.length) list.innerHTML = `<div class="empty-hint">${esc(t('elem.empty'))}</div>`;
 }
 function centerOn(it) {
   let wx, wy;
@@ -518,8 +519,8 @@ function selectInput(val, opts, onch) {
   opts.forEach(o => { const [v, t] = Array.isArray(o) ? o : [o, o]; const op = document.createElement('option'); op.value = v; op.textContent = t; if (v === val) op.selected = true; s.appendChild(op); });
   s.addEventListener('change', () => onch(s.value)); return s;
 }
-function patternOptions() { return [['', '（无）'], ...state.net.patterns.map(p => [p.id, p.id])]; }
-function curveOptions() { return [['', '（无）'], ...state.net.curves.map(c => [c.id, c.id])]; }
+function patternOptions() { return [['', t('opt.none')], ...state.net.patterns.map(p => [p.id, p.id])]; }
+function curveOptions() { return [['', t('opt.none')], ...state.net.curves.map(c => [c.id, c.id])]; }
 function nodeOptions() { return state.net.nodes.map(n => [n.id, n.id]); }
 
 function buildPropsForm() {
@@ -535,7 +536,7 @@ function buildPropsForm() {
   form.appendChild(head);
 
   // ID
-  form.appendChild(field('ID 标识', textInput(obj.id, v => renameId(v))));
+  form.appendChild(field(t('prop.id'), textInput(obj.id, v => renameId(v))));
 
   if (isNode) {
     const row = document.createElement('div'); row.className = 'field-row';
@@ -543,48 +544,48 @@ function buildPropsForm() {
     row.appendChild(field('Y', numInput(obj.y, v => { obj.y = v; markDirty(false); render(); })));
     form.appendChild(row);
     if (obj.type === 'JUNCTION') {
-      form.appendChild(field('高程 (m)', numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
-      form.appendChild(field('基准需水量', numInput(obj.demand, v => { obj.demand = v; markDirty(false); })));
-      form.appendChild(field('需水模式', selectInput(obj.demandPattern, patternOptions(), v => { obj.demandPattern = v; markDirty(false); })));
+      form.appendChild(field(t('prop.elev'), numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
+      form.appendChild(field(t('prop.baseDemand'), numInput(obj.demand, v => { obj.demand = v; markDirty(false); })));
+      form.appendChild(field(t('prop.demandPat'), selectInput(obj.demandPattern, patternOptions(), v => { obj.demandPattern = v; markDirty(false); })));
     } else if (obj.type === 'RESERVOIR') {
-      form.appendChild(field('水头 (m)', numInput(obj.head, v => { obj.head = v; markDirty(false); })));
-      form.appendChild(field('水头模式', selectInput(obj.headPattern, patternOptions(), v => { obj.headPattern = v; markDirty(false); })));
+      form.appendChild(field(t('prop.head'), numInput(obj.head, v => { obj.head = v; markDirty(false); })));
+      form.appendChild(field(t('prop.headPat'), selectInput(obj.headPattern, patternOptions(), v => { obj.headPattern = v; markDirty(false); })));
     } else if (obj.type === 'TANK') {
-      form.appendChild(field('底部高程 (m)', numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
+      form.appendChild(field(t('prop.tankElev'), numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
       const r1 = document.createElement('div'); r1.className = 'field-row';
-      r1.appendChild(field('初始水位', numInput(obj.initLevel, v => { obj.initLevel = v; markDirty(false); })));
-      r1.appendChild(field('直径 (m)', numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
+      r1.appendChild(field(t('prop.initLevel'), numInput(obj.initLevel, v => { obj.initLevel = v; markDirty(false); })));
+      r1.appendChild(field(t('prop.diamM'), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
       form.appendChild(r1);
       const r2 = document.createElement('div'); r2.className = 'field-row';
-      r2.appendChild(field('最低水位', numInput(obj.minLevel, v => { obj.minLevel = v; markDirty(false); })));
-      r2.appendChild(field('最高水位', numInput(obj.maxLevel, v => { obj.maxLevel = v; markDirty(false); })));
+      r2.appendChild(field(t('prop.minLevel'), numInput(obj.minLevel, v => { obj.minLevel = v; markDirty(false); })));
+      r2.appendChild(field(t('prop.maxLevel'), numInput(obj.maxLevel, v => { obj.maxLevel = v; markDirty(false); })));
       form.appendChild(r2);
-      form.appendChild(field('最小容积', numInput(obj.minVol, v => { obj.minVol = v; markDirty(false); })));
-      form.appendChild(field('容积曲线', selectInput(obj.volCurve, curveOptions(), v => { obj.volCurve = v; markDirty(false); })));
+      form.appendChild(field(t('prop.minVol'), numInput(obj.minVol, v => { obj.minVol = v; markDirty(false); })));
+      form.appendChild(field(t('prop.volCurve'), selectInput(obj.volCurve, curveOptions(), v => { obj.volCurve = v; markDirty(false); })));
     }
-    form.appendChild(field('初始水质', numInput(obj.initQual, v => { obj.initQual = v; markDirty(false); })));
+    form.appendChild(field(t('prop.initQual'), numInput(obj.initQual, v => { obj.initQual = v; markDirty(false); })));
   } else {
     const row = document.createElement('div'); row.className = 'field-row';
-    row.appendChild(field('起点', selectInput(obj.from, nodeOptions(), v => { obj.from = v; markDirty(true); render(); })));
-    row.appendChild(field('终点', selectInput(obj.to, nodeOptions(), v => { obj.to = v; markDirty(true); render(); })));
+    row.appendChild(field(t('prop.from'), selectInput(obj.from, nodeOptions(), v => { obj.from = v; markDirty(true); render(); })));
+    row.appendChild(field(t('prop.to'), selectInput(obj.to, nodeOptions(), v => { obj.to = v; markDirty(true); render(); })));
     form.appendChild(row);
     if (obj.type === 'PIPE') {
-      form.appendChild(field('长度 (m)', numInput(obj.length, v => { obj.length = v; markDirty(false); })));
-      form.appendChild(field('管径 (mm)', numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
-      form.appendChild(field('粗糙系数', numInput(obj.roughness, v => { obj.roughness = v; markDirty(false); })));
-      form.appendChild(field('局部损失系数', numInput(obj.minorLoss, v => { obj.minorLoss = v; markDirty(false); })));
-      form.appendChild(field('初始状态', selectInput(obj.status, [['OPEN', '开启'], ['CLOSED', '关闭'], ['CV', '止回阀']], v => { obj.status = v; markDirty(false); render(); })));
+      form.appendChild(field(t('prop.length'), numInput(obj.length, v => { obj.length = v; markDirty(false); })));
+      form.appendChild(field(t('prop.diamMm'), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
+      form.appendChild(field(t('prop.rough'), numInput(obj.roughness, v => { obj.roughness = v; markDirty(false); })));
+      form.appendChild(field(t('prop.minorLoss'), numInput(obj.minorLoss, v => { obj.minorLoss = v; markDirty(false); })));
+      form.appendChild(field(t('prop.initStatus'), selectInput(obj.status, [['OPEN', t('status.open')], ['CLOSED', t('status.closed')], ['CV', t('status.cv')]], v => { obj.status = v; markDirty(false); render(); })));
     } else if (obj.type === 'PUMP') {
-      form.appendChild(field('扬程曲线', selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
-      form.appendChild(field('恒定功率 (kW，曲线为空时生效)', numInput(obj.power, v => { obj.power = v; markDirty(false); })));
-      form.appendChild(field('相对转速', numInput(obj.speed, v => { obj.speed = v; markDirty(false); }, '0.1')));
-      form.appendChild(field('转速模式', selectInput(obj.speedPattern, patternOptions(), v => { obj.speedPattern = v; markDirty(false); })));
+      form.appendChild(field(t('prop.headCurve'), selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
+      form.appendChild(field(t('prop.power'), numInput(obj.power, v => { obj.power = v; markDirty(false); })));
+      form.appendChild(field(t('prop.speed'), numInput(obj.speed, v => { obj.speed = v; markDirty(false); }, '0.1')));
+      form.appendChild(field(t('prop.speedPat'), selectInput(obj.speedPattern, patternOptions(), v => { obj.speedPattern = v; markDirty(false); })));
     } else {
-      form.appendChild(field('阀门类型', selectInput(obj.type, VALVE_TYPES, v => { obj.type = v; markDirty(false); buildPropsForm(); render(); })));
-      form.appendChild(field('管径 (mm)', numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
-      if (obj.type === 'GPV') form.appendChild(field('水头损失曲线', selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
-      else form.appendChild(field('设定值', numInput(obj.setting, v => { obj.setting = v; markDirty(false); })));
-      form.appendChild(field('局部损失系数', numInput(obj.minorLoss, v => { obj.minorLoss = v; markDirty(false); })));
+      form.appendChild(field(t('prop.valveType'), selectInput(obj.type, VALVE_TYPES, v => { obj.type = v; markDirty(false); buildPropsForm(); render(); })));
+      form.appendChild(field(t('prop.diamMm'), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
+      if (obj.type === 'GPV') form.appendChild(field(t('prop.hlossCurve'), selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
+      else form.appendChild(field(t('prop.setting'), numInput(obj.setting, v => { obj.setting = v; markDirty(false); })));
+      form.appendChild(field(t('prop.minorLoss'), numInput(obj.minorLoss, v => { obj.minorLoss = v; markDirty(false); })));
     }
   }
 
@@ -594,19 +595,19 @@ function buildPropsForm() {
     if (rs) form.appendChild(resultReadout(rs, isNode));
   }
 
-  const del = document.createElement('button'); del.className = 'btn btn-delete'; del.textContent = '删除元素';
+  const del = document.createElement('button'); del.className = 'btn btn-delete'; del.textContent = t('prop.delete');
   del.addEventListener('click', deleteSelection); form.appendChild(del);
 }
 
 function resultReadout(rs, isNode) {
-  const t = state.timeIndex; const u = state.results.units;
+  const ti = state.timeIndex; const u = state.results.units;
   const box = document.createElement('div'); box.className = 'result-readout';
   const rows = isNode
-    ? [['压力', rs.pressure[t], u.pressure], ['水头', rs.head[t], u.head], ['需水', rs.demand[t], u.flow]]
-    : [['流量', rs.flow[t], u.flow], ['流速', rs.velocity[t], u.velocity], ['水头损失', rs.headloss[t], u.headloss], ['状态', rs.status[t] > 0.5 ? '开启' : '关闭', '']];
-  if (isNode && u.quality) rows.push(['水质', rs.quality[t], u.quality]);
-  box.innerHTML = `<div class="prop-section-title" style="margin-top:0">当前时段结果</div>` +
-    rows.map(([k, v, un]) => `<div class="rr-row"><span>${k}</span><span>${typeof v === 'number' ? fmt(v) : v} ${un}</span></div>`).join('');
+    ? [[t('m.pressure'), rs.pressure[ti], u.pressure], [t('m.head'), rs.head[ti], u.head], [t('m.demand'), rs.demand[ti], u.flow]]
+    : [[t('m.flow'), rs.flow[ti], u.flow], [t('m.velocity'), rs.velocity[ti], u.velocity], [t('m.headloss'), rs.headloss[ti], u.headloss], [t('m.status'), rs.status[ti] > 0.5 ? t('status.open') : t('status.closed'), '']];
+  if (isNode && u.quality) rows.push([t('m.quality'), rs.quality[ti], u.quality]);
+  box.innerHTML = `<div class="prop-section-title" style="margin-top:0">${esc(t('prop.currentResult'))}</div>` +
+    rows.map(([k, v, un]) => `<div class="rr-row"><span>${esc(k)}</span><span>${typeof v === 'number' ? fmt(v) : esc(v)} ${un}</span></div>`).join('');
   return box;
 }
 
@@ -615,7 +616,7 @@ function renameId(v) {
   const obj = selObj(); const old = obj.id;
   if (v === old) return;
   const arr = state.sel.kind === 'node' ? state.net.nodes : state.net.links;
-  if (arr.some(x => x.id === v)) { toast('ID 已存在', 'err'); buildPropsForm(); return; }
+  if (arr.some(x => x.id === v)) { toast(t('err.idExists'), 'err'); buildPropsForm(); return; }
   obj.id = v;
   if (state.sel.kind === 'node') state.net.links.forEach(l => { if (l.from === old) l.from = v; if (l.to === old) l.to = v; });
   state.sel.id = v;
@@ -626,41 +627,41 @@ function renameId(v) {
 function buildSettings() {
   const p = $('settingsPanel'); p.innerHTML = '';
   const o = state.net.options, tm = state.net.times, q = state.net.quality;
-  p.appendChild(field('工程名称', textInput(state.net.title, v => { state.net.title = v; autosave(); })));
+  p.appendChild(field(t('set.title'), textInput(state.net.title, v => { state.net.title = v; autosave(); })));
 
-  p.appendChild(sectionTitle('分析选项'));
-  p.appendChild(field('流量单位', selectInput(o.flowUnits, [['LPS', 'L/s 升/秒'], ['LPM', 'L/min 升/分'], ['CMH', 'm³/h'], ['CMD', 'm³/天'], ['CMS', 'm³/s'], ['MLD', 'ML/天'], ['GPM', 'gal/min'], ['CFS', 'ft³/s'], ['MGD', 'Mgal/天']], v => { o.flowUnits = v; markDirty(false); })));
-  p.appendChild(field('水头损失公式', selectInput(o.headLoss, [['H-W', 'Hazen-Williams'], ['D-W', 'Darcy-Weisbach'], ['C-M', 'Chezy-Manning']], v => { o.headLoss = v; markDirty(false); })));
-  p.appendChild(field('需水总乘数', numInput(o.demandMult, v => { o.demandMult = v; markDirty(false); }, '0.1')));
+  p.appendChild(sectionTitle(t('set.analysis')));
+  p.appendChild(field(t('set.flowUnits'), selectInput(o.flowUnits, [['LPS', t('unit.lps')], ['LPM', t('unit.lpm')], ['CMH', t('unit.cmh')], ['CMD', t('unit.cmd')], ['CMS', t('unit.cms')], ['MLD', t('unit.mld')], ['GPM', t('unit.gpm')], ['CFS', t('unit.cfs')], ['MGD', t('unit.mgd')]], v => { o.flowUnits = v; markDirty(false); })));
+  p.appendChild(field(t('set.headLoss'), selectInput(o.headLoss, [['H-W', 'Hazen-Williams'], ['D-W', 'Darcy-Weisbach'], ['C-M', 'Chezy-Manning']], v => { o.headLoss = v; markDirty(false); })));
+  p.appendChild(field(t('set.demandMult'), numInput(o.demandMult, v => { o.demandMult = v; markDirty(false); }, '0.1')));
   const r = document.createElement('div'); r.className = 'field-row';
-  r.appendChild(field('最大迭代', numInput(o.trials, v => { o.trials = v; markDirty(false); }, '1')));
-  r.appendChild(field('收敛精度', numInput(o.accuracy, v => { o.accuracy = v; markDirty(false); }, '0.0001')));
+  r.appendChild(field(t('set.trials'), numInput(o.trials, v => { o.trials = v; markDirty(false); }, '1')));
+  r.appendChild(field(t('set.accuracy'), numInput(o.accuracy, v => { o.accuracy = v; markDirty(false); }, '0.0001')));
   p.appendChild(r);
 
-  p.appendChild(sectionTitle('时间设置（小时）'));
-  p.appendChild(field('模拟时长 (h)', numInput(tm.duration / 3600, v => { tm.duration = Math.round(v * 3600); markDirty(false); }, '1')));
+  p.appendChild(sectionTitle(t('set.time')));
+  p.appendChild(field(t('set.duration'), numInput(tm.duration / 3600, v => { tm.duration = Math.round(v * 3600); markDirty(false); }, '1')));
   const r2 = document.createElement('div'); r2.className = 'field-row';
-  r2.appendChild(field('水力步长 (h)', numInput(tm.hydStep / 3600, v => { tm.hydStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
-  r2.appendChild(field('报告步长 (h)', numInput(tm.reportStep / 3600, v => { tm.reportStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
+  r2.appendChild(field(t('set.hydStep'), numInput(tm.hydStep / 3600, v => { tm.hydStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
+  r2.appendChild(field(t('set.reportStep'), numInput(tm.reportStep / 3600, v => { tm.reportStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
   p.appendChild(r2);
   const r3 = document.createElement('div'); r3.className = 'field-row';
-  r3.appendChild(field('模式步长 (h)', numInput(tm.patternStep / 3600, v => { tm.patternStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
-  r3.appendChild(field('起始时刻 (h)', numInput(tm.startClock / 3600, v => { tm.startClock = Math.round(v * 3600); markDirty(false); }, '1')));
+  r3.appendChild(field(t('set.patternStep'), numInput(tm.patternStep / 3600, v => { tm.patternStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, '0.5')));
+  r3.appendChild(field(t('set.startClock'), numInput(tm.startClock / 3600, v => { tm.startClock = Math.round(v * 3600); markDirty(false); }, '1')));
   p.appendChild(r3);
-  p.appendChild(field('报告统计', selectInput(tm.statistic, [['NONE', '时间序列'], ['AVERAGED', '平均'], ['MINIMUM', '最小'], ['MAXIMUM', '最大'], ['RANGE', '极差']], v => { tm.statistic = v; markDirty(false); })));
+  p.appendChild(field(t('set.statistic'), selectInput(tm.statistic, [['NONE', t('stat.series')], ['AVERAGED', t('stat.avg')], ['MINIMUM', t('stat.min')], ['MAXIMUM', t('stat.max')], ['RANGE', t('stat.range')]], v => { tm.statistic = v; markDirty(false); })));
 
-  p.appendChild(sectionTitle('水质分析'));
-  p.appendChild(field('水质类型', selectInput(q.type, [['NONE', '无'], ['CHEM', '化学物质'], ['AGE', '水龄'], ['TRACE', '水源追踪']], v => { q.type = v; markDirty(false); buildSettings(); })));
+  p.appendChild(sectionTitle(t('set.quality')));
+  p.appendChild(field(t('set.qualType'), selectInput(q.type, [['NONE', t('qual.none')], ['CHEM', t('qual.chem')], ['AGE', t('qual.age')], ['TRACE', t('qual.trace')]], v => { q.type = v; markDirty(false); buildSettings(); })));
   if (q.type === 'CHEM') {
     const rq = document.createElement('div'); rq.className = 'field-row';
-    rq.appendChild(field('物质名称', textInput(q.chemName, v => { q.chemName = v; markDirty(false); })));
-    rq.appendChild(field('浓度单位', textInput(q.chemUnits, v => { q.chemUnits = v; markDirty(false); })));
+    rq.appendChild(field(t('set.chemName'), textInput(q.chemName, v => { q.chemName = v; markDirty(false); })));
+    rq.appendChild(field(t('set.chemUnits'), textInput(q.chemUnits, v => { q.chemUnits = v; markDirty(false); })));
     p.appendChild(rq);
   } else if (q.type === 'TRACE') {
-    p.appendChild(field('追踪水源节点', selectInput(q.traceNode, [['', '（选择）'], ...nodeOptions()], v => { q.traceNode = v; markDirty(false); })));
+    p.appendChild(field(t('set.traceNode'), selectInput(q.traceNode, [['', t('opt.select')], ...nodeOptions()], v => { q.traceNode = v; markDirty(false); })));
   }
 }
-function sectionTitle(t) { const d = document.createElement('div'); d.className = 'prop-section-title'; d.textContent = t; return d; }
+function sectionTitle(txt) { const d = document.createElement('div'); d.className = 'prop-section-title'; d.textContent = txt; return d; }
 
 /* ============================ data modal ============================ */
 function openData() {
@@ -673,14 +674,14 @@ function openData() {
 }
 function patternRow(id, vals) {
   const row = document.createElement('div'); row.className = 'data-row';
-  row.innerHTML = `<input type="text" class="did" value="${esc(id)}" placeholder="模式ID"><textarea class="dvals" rows="2" placeholder="1, 1.2, 0.8 ...">${esc(vals)}</textarea><button class="btn btn-del-row">✕</button>`;
+  row.innerHTML = `<input type="text" class="did" value="${esc(id)}" placeholder="${esc(t('data.patternId'))}"><textarea class="dvals" rows="2" placeholder="1, 1.2, 0.8 ...">${esc(vals)}</textarea><button class="btn btn-del-row">✕</button>`;
   row.querySelector('.btn-del-row').addEventListener('click', () => row.remove());
   return row;
 }
 function curveRow(id, type, pts) {
   const row = document.createElement('div'); row.className = 'data-row';
-  const opts = ['PUMP', 'EFFICIENCY', 'VOLUME', 'HEADLOSS', 'GENERIC'].map(t => `<option ${t === type ? 'selected' : ''}>${t}</option>`).join('');
-  row.innerHTML = `<input type="text" class="did" value="${esc(id)}" placeholder="曲线ID"><select class="dtype">${opts}</select><textarea class="dvals" rows="2" placeholder="0,55&#10;40,45&#10;80,25">${esc(pts)}</textarea><button class="btn btn-del-row">✕</button>`;
+  const opts = ['PUMP', 'EFFICIENCY', 'VOLUME', 'HEADLOSS', 'GENERIC'].map(ct => `<option ${ct === type ? 'selected' : ''}>${ct}</option>`).join('');
+  row.innerHTML = `<input type="text" class="did" value="${esc(id)}" placeholder="${esc(t('data.curveId'))}"><select class="dtype">${opts}</select><textarea class="dvals" rows="2" placeholder="0,55&#10;40,45&#10;80,25">${esc(pts)}</textarea><button class="btn btn-del-row">✕</button>`;
   row.querySelector('.btn-del-row').addEventListener('click', () => row.remove());
   return row;
 }
@@ -702,7 +703,7 @@ function applyData() {
   });
   const controls = $('controlsText').value.split('\n').map(s => s.trim()).filter(Boolean);
   state.net.patterns = patterns; state.net.curves = curves; state.net.controls = controls;
-  $('dataModal').hidden = true; markDirty(true); buildSettings(); toast('已应用模式/曲线/控制', 'ok');
+  $('dataModal').hidden = true; markDirty(true); buildSettings(); toast(t('toast.dataApplied'), 'ok');
 }
 $('btnAddPattern').addEventListener('click', () => $('patternList').appendChild(patternRow(genId('PAT', state.net.patterns), '1, 1, 1, 1')));
 $('btnAddCurve').addEventListener('click', () => $('curveList').appendChild(curveRow(genId('C', state.net.curves), 'PUMP', '0,50\n50,30')));
@@ -712,21 +713,21 @@ $('btnApplyData').addEventListener('click', applyData);
 
 /* ============================ simulation ============================ */
 async function runSim() {
-  if (!state.net.nodes.length) { toast('请先绘制管网', 'err'); return; }
-  const btn = $('btnRun'); btn.disabled = true; btn.textContent = '模拟中…';
+  if (!state.net.nodes.length) { toast(t('err.drawFirst'), 'err'); return; }
+  const btn = $('btnRun'); btn.disabled = true; btn.textContent = t('btn.running');
   try {
     const res = await api('/api/simulate', 'POST', state.net);
-    if (!res.ok) { toast(res.error || '模拟失败', 'err'); return; }
+    if (!res.ok) { toast(res.error || t('err.simFailed'), 'err'); return; }
     state.results = res; state.stale = false; state.timeIndex = 0;
     state.resNode = {}; state.resLink = {};
     res.nodes.forEach(n => state.resNode[n.id] = n);
     res.links.forEach(l => state.resLink[l.id] = l);
     for (const k in _rangeCache) delete _rangeCache[k];
     showResults();
-    const w = res.warnings && res.warnings.length ? `（${res.warnings.length} 条警告）` : '';
-    toast(`模拟完成：${res.times.length} 个时段${w}`, 'ok');
-  } catch (e) { toast('请求失败: ' + e.message, 'err'); }
-  finally { btn.disabled = false; btn.textContent = '▶ 运行模拟'; }
+    const w = res.warnings && res.warnings.length ? t('toast.warnCount', res.warnings.length) : '';
+    toast(t('toast.simDone', res.times.length, w), 'ok');
+  } catch (e) { toast(t('err.request') + e.message, 'err'); }
+  finally { btn.disabled = false; updateRunButton(); }
 }
 
 function showResults() {
@@ -735,16 +736,16 @@ function showResults() {
   if (state.results.units.quality) { $('nodeColor').querySelector('option[value=quality]').disabled = false; }
   else { $('nodeColor').querySelector('option[value=quality]').disabled = true; if (state.nodeColor === 'quality') { state.nodeColor = 'pressure'; $('nodeColor').value = 'pressure'; } }
   updateTimeUI(); renderTables(); renderLegend(); buildPropsForm(); render();
-  $('rpSummary').textContent = `${state.results.nodes.length} 节点 · ${state.results.links.length} 管段 · ${state.results.times.length} 时段`;
+  $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
 }
 function clearResults() {
   state.results = null; state.resNode = {}; state.resLink = {}; state.playing = false; state.stale = false;
-  $('resultBar').hidden = true; $('resultsPanel').hidden = true; $('btnRun').textContent = '▶ 运行模拟';
+  $('resultBar').hidden = true; $('resultsPanel').hidden = true; updateRunButton();
   stopPlay(); render();
 }
 function updateTimeUI() {
-  const t = state.results.times[state.timeIndex];
-  $('timeLabel').textContent = 't = ' + clock(t);
+  const sec = state.results.times[state.timeIndex];
+  $('timeLabel').textContent = 't = ' + clock(sec);
   $('timeSlider').value = state.timeIndex;
 }
 $('timeSlider').addEventListener('input', e => { state.timeIndex = +e.target.value; updateTimeUI(); renderTables(); renderLegend(); buildPropsForm(); render(); });
@@ -772,44 +773,44 @@ function renderLegend() {
   const grad = `linear-gradient(90deg, ${SCALE.map(s => s[1]).join(',')})`;
   el.innerHTML = `<span>${labelFor(state.nodeColor)}</span><span class="legend-gradient" style="background:${grad}"></span><span>${fmt(nr.min)} ~ ${fmt(nr.max)} ${unit}</span>`;
 }
-function labelFor(k) { return { pressure: '压力', head: '水头', demand: '需水', quality: '水质', flow: '流量', velocity: '流速', headloss: '水头损失', status: '状态' }[k] || k; }
+function labelFor(k) { return t('m.' + k) !== 'm.' + k ? t('m.' + k) : k; }
 
 /* ============================ result tables ============================ */
 document.querySelectorAll('.rptab').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.rptab').forEach(x => x.classList.toggle('active', x === b));
-  const t = b.dataset.rptab;
-  $('nodeTableWrap').hidden = t !== 'nodes'; $('linkTableWrap').hidden = t !== 'links'; $('warningsWrap').hidden = t !== 'warnings';
+  const tab = b.dataset.rptab;
+  $('nodeTableWrap').hidden = tab !== 'nodes'; $('linkTableWrap').hidden = tab !== 'links'; $('warningsWrap').hidden = tab !== 'warnings';
 }));
 $('btnToggleResults').addEventListener('click', () => $('resultsPanel').classList.toggle('collapsed'));
 
 function renderTables() {
   if (!state.results) return;
-  const t = state.timeIndex, u = state.results.units;
+  const ti = state.timeIndex, u = state.results.units;
   // nodes
-  let h = `<table><thead><tr><th>ID</th><th>类型</th><th>高程</th><th>压力 (${u.pressure})</th><th>水头 (${u.head})</th><th>需水 (${u.flow})</th>`;
-  if (u.quality) h += `<th>水质 (${u.quality})</th>`;
+  let h = `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.type')}</th><th>${t('th.elev')}</th><th>${t('th.pressure')} (${u.pressure})</th><th>${t('th.head')} (${u.head})</th><th>${t('th.demand')} (${u.flow})</th>`;
+  if (u.quality) h += `<th>${t('th.quality')} (${u.quality})</th>`;
   h += `</tr></thead><tbody>`;
   state.results.nodes.forEach(n => {
-    const p = n.pressure[t]; const bad = n.type === 'JUNCTION' && p < 0;
-    h += `<tr data-kind="node" data-id="${esc(n.id)}"><td>${esc(n.id)}</td><td>${n.type}</td><td class="num">${fmt(nodeById(n.id) ? nodeById(n.id).elevation : 0)}</td><td class="num ${bad ? 'cell-bad' : ''}">${fmt(p)}</td><td class="num">${fmt(n.head[t])}</td><td class="num">${fmt(n.demand[t])}</td>`;
-    if (u.quality) h += `<td class="num">${fmt(n.quality[t])}</td>`;
+    const p = n.pressure[ti]; const bad = n.type === 'JUNCTION' && p < 0;
+    h += `<tr data-kind="node" data-id="${esc(n.id)}"><td>${esc(n.id)}</td><td>${n.type}</td><td class="num">${fmt(nodeById(n.id) ? nodeById(n.id).elevation : 0)}</td><td class="num ${bad ? 'cell-bad' : ''}">${fmt(p)}</td><td class="num">${fmt(n.head[ti])}</td><td class="num">${fmt(n.demand[ti])}</td>`;
+    if (u.quality) h += `<td class="num">${fmt(n.quality[ti])}</td>`;
     h += `</tr>`;
   });
   h += `</tbody></table>`;
   $('nodeTableWrap').innerHTML = h;
   // links
-  let hl = `<table><thead><tr><th>ID</th><th>类型</th><th>起点→终点</th><th>流量 (${u.flow})</th><th>流速 (${u.velocity})</th><th>水头损失 (${u.headloss})</th><th>状态</th></tr></thead><tbody>`;
+  let hl = `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.type')}</th><th>${t('th.fromTo')}</th><th>${t('th.flow')} (${u.flow})</th><th>${t('th.velocity')} (${u.velocity})</th><th>${t('th.headloss')} (${u.headloss})</th><th>${t('th.status')}</th></tr></thead><tbody>`;
   state.results.links.forEach(l => {
-    const st = l.status[t] > 0.5 ? '开启' : '关闭';
-    const vwarn = Math.abs(l.velocity[t]) > 2 ? 'cell-warn' : '';
-    hl += `<tr data-kind="link" data-id="${esc(l.id)}"><td>${esc(l.id)}</td><td>${l.type}</td><td>${esc(l.from)}→${esc(l.to)}</td><td class="num">${fmt(l.flow[t])}</td><td class="num ${vwarn}">${fmt(l.velocity[t])}</td><td class="num">${fmt(l.headloss[t])}</td><td>${st}</td></tr>`;
+    const st = l.status[ti] > 0.5 ? t('status.open') : t('status.closed');
+    const vwarn = Math.abs(l.velocity[ti]) > 2 ? 'cell-warn' : '';
+    hl += `<tr data-kind="link" data-id="${esc(l.id)}"><td>${esc(l.id)}</td><td>${l.type}</td><td>${esc(l.from)}→${esc(l.to)}</td><td class="num">${fmt(l.flow[ti])}</td><td class="num ${vwarn}">${fmt(l.velocity[ti])}</td><td class="num">${fmt(l.headloss[ti])}</td><td>${st}</td></tr>`;
   });
   hl += `</tbody></table>`;
   $('linkTableWrap').innerHTML = hl;
   // warnings
   const ws = state.results.warnings || [];
-  $('warningsWrap').innerHTML = ws.length ? ws.map(w => `<div class="warn-item">⚠ ${esc(w)}</div>`).join('') : '<div class="warn-none">✓ 无警告，模拟正常收敛。</div>';
-  document.querySelector('.rptab[data-rptab=warnings]').textContent = ` 警告 (${ws.length})`;
+  $('warningsWrap').innerHTML = ws.length ? ws.map(w => `<div class="warn-item">⚠ ${esc(w)}</div>`).join('') : `<div class="warn-none">${esc(t('warn.none'))}</div>`;
+  document.querySelector('.rptab[data-rptab=warnings]').textContent = ' ' + t('rptab.warningsCount', ws.length);
   // row click
   document.querySelectorAll('#rpBody tr[data-id]').forEach(tr => tr.addEventListener('click', () => {
     select({ kind: tr.dataset.kind, id: tr.dataset.id });
@@ -824,8 +825,8 @@ function highlightTableRow() {
 
 /* ============================ file ops ============================ */
 async function loadExample() {
-  try { const net = await api('/api/example'); loadNetwork(net); fitView(); toast('已加载示例管网', 'ok'); }
-  catch (e) { toast('加载示例失败: ' + e.message, 'err'); }
+  try { const net = await api('/api/example'); loadNetwork(net); fitView(); toast(t('toast.exampleLoaded'), 'ok'); }
+  catch (e) { toast(t('err.exampleLoad') + e.message, 'err'); }
 }
 function loadNetwork(net) {
   // normalize
@@ -837,30 +838,30 @@ function loadNetwork(net) {
   net.links.forEach(l => { l.vertices = l.vertices || []; });
   state.net = net; select(null); clearResults(); buildSettings(); renderElemList(); render(); autosave();
 }
-function newNetwork() { loadNetwork(emptyNetwork()); fitView(); toast('已新建空白管网'); }
+function newNetwork() { loadNetwork(emptyNetwork()); fitView(); toast(t('toast.newNet')); }
 
 $('btnExample').addEventListener('click', loadExample);
-$('btnNew').addEventListener('click', () => { if (confirm('新建将清空当前管网，确定？')) newNetwork(); });
+$('btnNew').addEventListener('click', () => { if (confirm(t('confirm.new'))) newNetwork(); });
 $('btnRun').addEventListener('click', runSim);
 $('btnExport').addEventListener('click', async () => {
   try {
     const text = await api('/api/export', 'POST', state.net, true);
     download(text, (state.net.title || 'network') + '.inp', 'text/plain');
-  } catch (e) { toast('导出失败: ' + e.message, 'err'); }
+  } catch (e) { toast(t('err.export') + e.message, 'err'); }
 });
 $('btnSave').addEventListener('click', () => download(JSON.stringify(state.net, null, 2), (state.net.title || 'network') + '.json', 'application/json'));
 $('btnImport').addEventListener('click', () => $('fileInp').click());
 $('btnOpen').addEventListener('click', () => $('fileJson').click());
 $('fileInp').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
-  try { const text = await f.text(); const net = await api('/api/import', 'POST', text, true); loadNetwork(net); fitView(); toast('已导入 INP: ' + f.name, 'ok'); }
-  catch (err) { toast('导入失败: ' + err.message, 'err'); }
+  try { const text = await f.text(); const net = await api('/api/import', 'POST', text, true); loadNetwork(net); fitView(); toast(t('toast.imported') + f.name, 'ok'); }
+  catch (err) { toast(t('err.import') + err.message, 'err'); }
   e.target.value = '';
 });
 $('fileJson').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
-  try { const net = JSON.parse(await f.text()); loadNetwork(net); fitView(); toast('已打开工程: ' + f.name, 'ok'); }
-  catch (err) { toast('打开失败: ' + err.message, 'err'); }
+  try { const net = JSON.parse(await f.text()); loadNetwork(net); fitView(); toast(t('toast.opened') + f.name, 'ok'); }
+  catch (err) { toast(t('err.open') + err.message, 'err'); }
   e.target.value = '';
 });
 function download(text, name, mime) {
@@ -895,15 +896,40 @@ function zoomBtn(f) {
 }
 window.addEventListener('resize', resize);
 
+/* ============================ i18n wiring ============================ */
+function updateEngineBadge() {
+  const badge = $('engineBadge');
+  if (state.engineStatus === 'ok') { badge.textContent = 'EPANET ' + state.engineVersion; badge.className = 'engine-badge ok'; }
+  else if (state.engineStatus === 'notready') { badge.textContent = t('engine.notReady'); badge.className = 'engine-badge err'; }
+  else if (state.engineStatus === 'connfail') { badge.textContent = t('engine.connFail'); badge.className = 'engine-badge err'; }
+  else { badge.textContent = t('engine.checking'); badge.className = 'engine-badge'; }
+}
+function updateRunButton() {
+  const btn = $('btnRun');
+  if (btn.disabled) { btn.textContent = t('btn.running'); return; }
+  btn.textContent = (state.results && state.stale) ? t('btn.rerun') : t('btn.run');
+}
+function refreshLangUI() {
+  updateEngineBadge(); updateRunButton();
+  setTool(state.tool); renderElemList(); buildPropsForm(); buildSettings();
+  if (state.results) {
+    renderTables(); renderLegend(); updateTimeUI();
+    $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
+  }
+}
+$('langSelect').value = LANG;
+$('langSelect').addEventListener('change', e => setLang(e.target.value));
+document.addEventListener('langchange', () => { $('langSelect').value = LANG; refreshLangUI(); });
+
 /* ============================ init ============================ */
 async function init() {
-  buildSettings(); renderElemList();
+  buildSettings(); renderElemList(); updateRunButton();
   try {
     const h = await api('/api/health');
-    const badge = $('engineBadge');
-    if (h.ready) { badge.textContent = 'EPANET ' + h.version; badge.className = 'engine-badge ok'; }
-    else { badge.textContent = '引擎未就绪'; badge.className = 'engine-badge err'; }
-  } catch (e) { $('engineBadge').textContent = '引擎连接失败'; $('engineBadge').className = 'engine-badge err'; }
+    state.engineVersion = h.version;
+    state.engineStatus = h.ready ? 'ok' : 'notready';
+  } catch (e) { state.engineStatus = 'connfail'; }
+  updateEngineBadge();
   // restore or load example
   let restored = false;
   try { const s = localStorage.getItem('epanet-web-net'); if (s) { loadNetwork(JSON.parse(s)); restored = true; } } catch (e) {}
