@@ -171,22 +171,11 @@
       <span data-i18n="modal.title">时间模式 · 数据曲线 · 控制规则</span>
       <button class="btn btn-icon" id="btnCloseData">✕</button>
     </div>
-    <div class="modal-body">
-      <div class="data-section">
-        <div class="data-head"><span data-i18n="data.patterns">时间模式（需水乘数，逗号分隔）</span><button class="btn btn-sm" id="btnAddPattern" data-i18n="btn.add">+ 添加</button></div>
-        <div id="patternList"></div>
-      </div>
-      <div class="data-section">
-        <div class="data-head"><span data-i18n="data.curves">数据曲线（水泵扬程曲线等，每行 x,y）</span><button class="btn btn-sm" id="btnAddCurve" data-i18n="btn.add">+ 添加</button></div>
-        <div id="curveList"></div>
-      </div>
-      <div class="data-section">
-        <div class="data-head"><span data-i18n="data.controls">控制规则（结构化构建）</span><button class="btn btn-sm" id="btnAddControl" data-i18n="ctl.add">+ 添加规则</button></div>
-        <div id="controlList"></div>
-      </div>
-      <div class="data-section">
-        <div class="data-head"><span data-i18n="data.rules">规则控制（RULES，基于条件）</span><button class="btn btn-sm" id="btnAddRule" data-i18n="btn.addRule">+ 添加规则</button></div>
-        <div id="ruleList"></div>
+    <div class="modal-body data-body">
+      <div class="data-tabs" id="dataTabs"></div>
+      <div class="data-main">
+        <div class="data-tree" id="dataTree"></div>
+        <div class="data-detail" id="dataDetail"></div>
       </div>
     </div>
     <div class="modal-foot">

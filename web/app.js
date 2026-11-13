@@ -1356,7 +1356,7 @@ function patternRow(id, values) {
   head.appendChild(selectInput('', [['', t('data.preset')], ['const', t('preset.const')], ['diurnal', t('preset.diurnal')], ['night', t('preset.night')]], v => { if (!v) return; ed._set(presetValues(v, ed._get().length || 24)); }));
   head.appendChild(btnSm(t('data.addStep'), () => { const v = ed._get(); v.push(v.length ? v[v.length - 1] : 1); ed._set(v); }));
   head.appendChild(btnSm(t('data.delStep'), () => { const v = ed._get(); if (v.length > 1) { v.pop(); ed._set(v); } }));
-  head.appendChild(btnSm('✕', () => row.remove()));
+  head.appendChild(btnSm('✕', () => { row.remove(); if (row._onDelete) row._onDelete(); }));
   row.appendChild(head); row.appendChild(ed);
   const hint = document.createElement('div'); hint.className = 'ed-hint'; hint.textContent = t('data.edHintBar'); row.appendChild(hint);
   row._ed = ed; row._idIn = idIn;
@@ -1370,7 +1370,7 @@ function curveRow(id, type, points) {
   const ed = curveEditor(points);
   head.appendChild(btnSm(t('data.addPoint'), () => { const v = ed._get(); const last = v[v.length - 1]; v.push({ x: last.x + 10, y: Math.max(0, last.y - 5) }); ed._set(v); }));
   head.appendChild(btnSm(t('data.delPoint'), () => { const v = ed._get(); if (v.length > 2) { v.pop(); ed._set(v); } }));
-  head.appendChild(btnSm('✕', () => row.remove()));
+  head.appendChild(btnSm('✕', () => { row.remove(); if (row._onDelete) row._onDelete(); }));
   row.appendChild(head); row.appendChild(ed);
   const hint = document.createElement('div'); hint.className = 'ed-hint'; hint.textContent = t('data.edHintCurve'); row.appendChild(hint);
   row._ed = ed; row._idIn = idIn; row._typeSel = typeSel;
@@ -1395,7 +1395,7 @@ function controlRow(rule) {
   const row = document.createElement('div'); row.className = 'ctl-row'; row._rule = rule;
   function rebuild() {
     row.innerHTML = '';
-    if (rule.raw !== undefined) { const ti = textInput(rule.raw, v => { rule.raw = v; }); ti.className = 'ctl-raw'; row.appendChild(ti); row.appendChild(btnSm('✕', () => row.remove())); return; }
+    if (rule.raw !== undefined) { const ti = textInput(rule.raw, v => { rule.raw = v; }); ti.className = 'ctl-raw'; row.appendChild(ti); row.appendChild(btnSm('✕', () => { row.remove(); if (row._onDelete) row._onDelete(); })); return; }
     const mk = (label, el) => { const f = field(label, el); f.className = 'field ctl-field'; row.appendChild(f); };
     mk(t('ctl.link'), selectInput(rule.link, linkOptions(), v => { rule.link = v; }));
     mk(t('ctl.action'), selectInput(rule.action, [['OPEN', t('ctl.open')], ['CLOSED', t('ctl.closed')], ['SET', t('ctl.set')]], v => { rule.action = v; rebuild(); }));
@@ -1409,7 +1409,7 @@ function controlRow(rule) {
       const ti = document.createElement('input'); ti.type = 'time'; ti.value = rule.clock; ti.addEventListener('change', () => { rule.clock = ti.value || '00:00'; });
       mk(t('ctl.clock'), ti);
     }
-    row.appendChild(btnSm('✕', () => row.remove()));
+    row.appendChild(btnSm('✕', () => { row.remove(); if (row._onDelete) row._onDelete(); }));
   }
   rebuild();
   return row;
@@ -1417,7 +1417,7 @@ function controlRow(rule) {
 function ruleRow(text) {
   const row = document.createElement('div'); row.className = 'data-card';
   const head = document.createElement('div'); head.className = 'data-card-head';
-  head.appendChild(btnSm('✕', () => row.remove()));
+  head.appendChild(btnSm('✕', () => { row.remove(); if (row._onDelete) row._onDelete(); }));
   row.appendChild(head);
   const ta = document.createElement('textarea'); ta.className = 'rule-text'; ta.value = text || ''; ta.rows = 5;
   ta.spellcheck = false; row.appendChild(ta);
@@ -1425,35 +1425,111 @@ function ruleRow(text) {
   row._ta = ta;
   return row;
 }
+const DATA_CATS = [
+  { key: 'patterns', tab: 'data.tab.patterns', add: 'btn.add' },
+  { key: 'curves', tab: 'data.tab.curves', add: 'btn.add' },
+  { key: 'controls', tab: 'data.tab.controls', add: 'ctl.add' },
+  { key: 'rules', tab: 'data.tab.rules', add: 'btn.addRule' },
+];
+let dataRows = null;
+let dataTab = 'patterns';
+let dataSel = { patterns: 0, curves: 0, controls: 0, rules: 0 };
+
+function dataItemLabel(row, cat) {
+  if (cat === 'patterns') return row._idIn.value.trim() || t('data.unnamed');
+  if (cat === 'curves') return (row._idIn.value.trim() || t('data.unnamed')) + ' · ' + row._typeSel.value;
+  if (cat === 'controls') {
+    const r = row._rule;
+    if (r.raw !== undefined) return r.raw.trim().slice(0, 24) || t('data.unnamed');
+    const act = r.action === 'SET' ? t('ctl.set') : r.action === 'CLOSED' ? t('ctl.closed') : t('ctl.open');
+    return (r.link || '—') + ' · ' + act;
+  }
+  const line = (row._ta.value || '').split('\n').map(s => s.trim()).find(s => s);
+  return line ? line.slice(0, 24) : t('data.unnamed');
+}
+function wireDataRow(row, cat) {
+  row._onDelete = () => {
+    const arr = dataRows[cat]; const idx = arr.indexOf(row);
+    if (idx >= 0) arr.splice(idx, 1);
+    if (dataSel[cat] >= arr.length) dataSel[cat] = Math.max(0, arr.length - 1);
+    renderDataTabs(); renderDataTree(); renderDataDetail();
+  };
+}
+function renderDataTabs() {
+  const bar = $('dataTabs'); bar.innerHTML = '';
+  DATA_CATS.forEach(c => {
+    const b = document.createElement('button'); b.type = 'button';
+    b.className = 'data-tab' + (dataTab === c.key ? ' active' : '');
+    b.innerHTML = `<span>${esc(t(c.tab))}</span><span class="data-tab-count">${dataRows[c.key].length}</span>`;
+    b.addEventListener('click', () => { dataTab = c.key; renderDataTabs(); renderDataTree(); renderDataDetail(); });
+    bar.appendChild(b);
+  });
+}
+function renderDataTree() {
+  const tree = $('dataTree'); tree.innerHTML = '';
+  const cat = DATA_CATS.find(c => c.key === dataTab);
+  const head = document.createElement('div'); head.className = 'data-tree-head';
+  const title = document.createElement('span'); title.className = 'data-tree-title'; title.textContent = t(cat.tab); head.appendChild(title);
+  head.appendChild(btnSm(t(cat.add), () => addDataItem(dataTab)));
+  tree.appendChild(head);
+  const list = document.createElement('div'); list.className = 'data-tree-list';
+  const arr = dataRows[dataTab];
+  if (!arr.length) { const e = document.createElement('div'); e.className = 'empty-hint'; e.textContent = t('data.empty'); list.appendChild(e); }
+  arr.forEach((row, i) => {
+    const item = document.createElement('div'); item.className = 'data-tree-item' + (i === dataSel[dataTab] ? ' sel' : '');
+    item.innerHTML = `<span class="dt-idx">${i + 1}</span><span class="dt-label">${esc(dataItemLabel(row, dataTab))}</span>`;
+    item.addEventListener('click', () => { dataSel[dataTab] = i; renderDataTree(); renderDataDetail(); });
+    list.appendChild(item);
+  });
+  tree.appendChild(list);
+}
+function renderDataDetail() {
+  const pane = $('dataDetail'); pane.innerHTML = '';
+  const arr = dataRows[dataTab];
+  if (!arr.length) { const e = document.createElement('div'); e.className = 'empty-hint'; e.textContent = t('data.emptyDetail'); pane.appendChild(e); return; }
+  const row = arr[Math.min(dataSel[dataTab], arr.length - 1)];
+  pane.appendChild(row);
+  if (row._ed) row._ed._redraw();
+}
+function addDataItem(cat) {
+  let row;
+  if (cat === 'patterns') row = patternRow(genId('PAT', dataRows.patterns.map(r => ({ id: r._idIn.value }))), [1, 1, 1, 1]);
+  else if (cat === 'curves') row = curveRow(genId('C', dataRows.curves.map(r => ({ id: r._idIn.value }))), 'PUMP', [{ x: 0, y: 50 }, { x: 50, y: 30 }]);
+  else if (cat === 'controls') row = controlRow({ link: (state.net.links[0] || {}).id || '', action: 'OPEN', setting: 0, cond: 'NODE', node: (state.net.nodes[0] || {}).id || '', op: 'BELOW', value: 0, clock: '06:00' });
+  else { const n = dataRows.rules.length + 1; row = ruleRow(`RULE ${n}\nIF NODE ${(state.net.nodes[0] || {}).id || 'J1'} PRESSURE > 20\nTHEN LINK ${(state.net.links[0] || {}).id || 'P1'} STATUS = OPEN\nELSE LINK ${(state.net.links[0] || {}).id || 'P1'} STATUS = CLOSED`); }
+  wireDataRow(row, cat);
+  dataRows[cat].push(row);
+  dataSel[cat] = dataRows[cat].length - 1;
+  renderDataTabs(); renderDataTree(); renderDataDetail();
+}
 function openData() {
   $('dataModal').hidden = false;
   dataEditors.length = 0;
-  const pl = $('patternList'); pl.innerHTML = '';
-  state.net.patterns.forEach(p => pl.appendChild(patternRow(p.id, p.values)));
-  const cl = $('curveList'); cl.innerHTML = '';
-  state.net.curves.forEach(c => cl.appendChild(curveRow(c.id, c.type, c.points)));
-  const ctl = $('controlList'); ctl.innerHTML = '';
-  state.net.controls.forEach(line => ctl.appendChild(controlRow(parseControl(line))));
-  const rl = $('ruleList'); rl.innerHTML = '';
-  (state.net.rules || []).forEach(r => rl.appendChild(ruleRow(r)));
+  dataRows = { patterns: [], curves: [], controls: [], rules: [] };
+  state.net.patterns.forEach(p => dataRows.patterns.push(patternRow(p.id, p.values)));
+  state.net.curves.forEach(c => dataRows.curves.push(curveRow(c.id, c.type, c.points)));
+  state.net.controls.forEach(line => dataRows.controls.push(controlRow(parseControl(line))));
+  (state.net.rules || []).forEach(r => dataRows.rules.push(ruleRow(r)));
+  DATA_CATS.forEach(c => dataRows[c.key].forEach(row => wireDataRow(row, c.key)));
+  dataTab = 'patterns';
+  dataSel = { patterns: 0, curves: 0, controls: 0, rules: 0 };
+  renderDataTabs(); renderDataTree(); renderDataDetail();
   redrawEditors();
 }
 function applyData() {
   const patterns = [];
-  $('patternList').querySelectorAll('.data-card').forEach(r => { const id = r._idIn.value.trim(); if (!id) return; patterns.push({ id, values: r._ed._get() }); });
+  dataRows.patterns.forEach(r => { const id = r._idIn.value.trim(); if (!id) return; patterns.push({ id, values: r._ed._get() }); });
   const curves = [];
-  $('curveList').querySelectorAll('.data-card').forEach(r => { const id = r._idIn.value.trim(); if (!id) return; curves.push({ id, type: r._typeSel.value, points: r._ed._get() }); });
+  dataRows.curves.forEach(r => { const id = r._idIn.value.trim(); if (!id) return; curves.push({ id, type: r._typeSel.value, points: r._ed._get() }); });
   const controls = [];
-  $('controlList').querySelectorAll('.ctl-row').forEach(r => { const s = controlString(r._rule); if (s) controls.push(s); });
+  dataRows.controls.forEach(r => { const s = controlString(r._rule); if (s) controls.push(s); });
   const rules = [];
-  $('ruleList').querySelectorAll('.data-card').forEach(r => { const s = r._ta.value.trim(); if (s) rules.push(s); });
+  dataRows.rules.forEach(r => { const s = r._ta.value.trim(); if (s) rules.push(s); });
   state.net.patterns = patterns; state.net.curves = curves; state.net.controls = controls; state.net.rules = rules;
   $('dataModal').hidden = true; markDirty(true); buildSettings(); toast(t('toast.dataApplied'), 'ok');
 }
-$('btnAddPattern').addEventListener('click', () => { const r = patternRow(genId('PAT', state.net.patterns), [1, 1, 1, 1]); $('patternList').appendChild(r); r._ed._redraw(); });
-$('btnAddCurve').addEventListener('click', () => { const r = curveRow(genId('C', state.net.curves), 'PUMP', [{ x: 0, y: 50 }, { x: 50, y: 30 }]); $('curveList').appendChild(r); r._ed._redraw(); });
-$('btnAddControl').addEventListener('click', () => { $('controlList').appendChild(controlRow({ link: (state.net.links[0] || {}).id || '', action: 'OPEN', setting: 0, cond: 'NODE', node: (state.net.nodes[0] || {}).id || '', op: 'BELOW', value: 0, clock: '06:00' })); });
-$('btnAddRule').addEventListener('click', () => { const n = (state.net.rules || []).length + 1; $('ruleList').appendChild(ruleRow(`RULE ${n}\nIF NODE ${(state.net.nodes[0] || {}).id || 'J1'} PRESSURE > 20\nTHEN LINK ${(state.net.links[0] || {}).id || 'P1'} STATUS = OPEN\nELSE LINK ${(state.net.links[0] || {}).id || 'P1'} STATUS = CLOSED`)); });
+$('dataDetail').addEventListener('input', () => { if (dataRows) renderDataTree(); });
+$('dataDetail').addEventListener('change', () => { if (dataRows) renderDataTree(); });
 $('btnData').addEventListener('click', openData);
 $('btnCloseData').addEventListener('click', () => { $('dataModal').hidden = true; });
 $('btnApplyData').addEventListener('click', applyData);
@@ -1837,7 +1913,7 @@ function refreshLangUI() {
   if (!$('mapPanel').hidden) buildMapPanel();
   if (!$('reviewModal').hidden) { state.review = reviewNetwork(); renderReview(); }
   if (!$('gisModal').hidden) renderGisModal();
-  if (!$('dataModal').hidden) redrawEditors();
+  if (!$('dataModal').hidden && dataRows) { renderDataTabs(); renderDataTree(); redrawEditors(); }
   updateAttribution();
   if (state.results) {
     renderTables(); renderLegend(); updateTimeUI();
