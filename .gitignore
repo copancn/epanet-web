@@ -1,0 +1,14 @@
+# Build output
+epanet-web.exe
+*.exe
+
+# Runtime log
+server.log
+*.log
+
+# Scratch / test artifacts
+example.json
+sim.json
+sim2.json
+export.inp
+reimport.json
