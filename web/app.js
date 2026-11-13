@@ -9,6 +9,7 @@ function emptyNetwork() {
     title: t('net.newTitle'), nodes: [], links: [], patterns: [], curves: [], controls: [],
     options: { ...DEFAULT_OPTIONS }, times: { ...DEFAULT_TIMES },
     quality: { type: 'NONE', chemName: 'Chlorine', chemUnits: 'mg/L', traceNode: '' },
+    geo: defaultGeo(),
   };
 }
 
@@ -107,7 +108,7 @@ function resize() {
 function render() {
   const W = canvas.clientWidth, H = canvas.clientHeight;
   ctx.clearRect(0, 0, W, H);
-  drawGrid(W, H);
+  if (state.net.geo && state.net.geo.enabled) drawMap(W, H); else drawGrid(W, H);
   state.net.links.forEach(l => drawLink(l));
   if (state.draft) drawDraft();
   state.net.nodes.forEach(n => drawNode(n));
@@ -129,6 +130,104 @@ function drawGrid(W, H) {
     const [, sy] = w2s(0, y); ctx.moveTo(0, sy); ctx.lineTo(W, sy);
   }
   ctx.stroke();
+}
+
+/* ============================ map layer (OSM) ============================ */
+const MERC_R = 6378137;                 // Web Mercator sphere radius (EPSG:3857)
+const MERC_C = 2 * Math.PI * MERC_R;    // world circumference in meters
+const TILE_SOURCES = [
+  { id: 'osm', nameKey: 'map.layer.osm', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom: 19, attr: '© OpenStreetMap contributors' },
+  { id: 'esri', nameKey: 'map.layer.esri', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZoom: 19, attr: 'Esri, Maxar, Earthstar Geographics' },
+  { id: 'topo', nameKey: 'map.layer.topo', url: 'https://a.tile.opentopomap.org/{z}/{x}/{y}.png', maxZoom: 17, attr: '© OpenTopoMap (CC-BY-SA)' },
+];
+function defaultGeo() {
+  return { enabled: false, opacity: 0.85, source: 'osm', lat: 39.9042, lon: 116.4074, ax: 0, ay: 0, scale: 1, rot: 0, anchorNode: '' };
+}
+function tileSource(id) { return TILE_SOURCES.find(s => s.id === id) || TILE_SOURCES[0]; }
+
+// network coords <-> Web Mercator via similarity transform (anchor + scale + rotation)
+function lonToMx(lon) { return MERC_R * lon * Math.PI / 180; }
+function latToMy(lat) { return MERC_R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)); }
+function mxToLon(mx) { return mx / MERC_R * 180 / Math.PI; }
+function myToLat(my) { return (2 * Math.atan(Math.exp(my / MERC_R)) - Math.PI / 2) * 180 / Math.PI; }
+function netToMerc(x, y) {
+  const g = state.net.geo;
+  const th = g.rot * Math.PI / 180;
+  const dx = (x - g.ax) * g.scale, dy = (y - g.ay) * g.scale;
+  const E = dx * Math.cos(th) - dy * Math.sin(th);
+  const N = dx * Math.sin(th) + dy * Math.cos(th);
+  return [lonToMx(g.lon) + E, latToMy(g.lat) + N];
+}
+function mercToNet(mx, my) {
+  const g = state.net.geo;
+  const th = g.rot * Math.PI / 180;
+  const E = mx - lonToMx(g.lon), N = my - latToMy(g.lat);
+  const dx = E * Math.cos(th) + N * Math.sin(th);
+  const dy = -E * Math.sin(th) + N * Math.cos(th);
+  const s = g.scale || 1;
+  return [g.ax + dx / s, g.ay + dy / s];
+}
+function mercToScreen(mx, my) { const [x, y] = mercToNet(mx, my); return w2s(x, y); }
+
+// LRU tile cache
+const tileCache = new Map();
+const TILE_CACHE_MAX = 256;
+function getTile(src, z, x, y) {
+  const n = 1 << z;
+  x = ((x % n) + n) % n;
+  y = Math.max(0, Math.min(n - 1, y));
+  const key = src.id + '/' + z + '/' + x + '/' + y;
+  let entry = tileCache.get(key);
+  if (entry) { tileCache.delete(key); tileCache.set(key, entry); return entry; }
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  entry = { img, ready: false, failed: false };
+  img.onload = () => { entry.ready = true; render(); };
+  img.onerror = () => { entry.failed = true; };
+  img.src = src.url.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+  tileCache.set(key, entry);
+  if (tileCache.size > TILE_CACHE_MAX) tileCache.delete(tileCache.keys().next().value);
+  return entry;
+}
+
+function drawMap(W, H) {
+  const g = state.net.geo;
+  const src = tileSource(g.source);
+  if (!(state.view.scale > 0) || !isFinite(state.view.scale) || !(W > 0) || !(H > 0)) return;
+  const ppm = state.view.scale / (g.scale || 1);   // screen pixels per Mercator meter
+  let z = Math.round(Math.log2(ppm * MERC_C / 256));
+  z = Math.max(0, Math.min(src.maxZoom, z));
+  const n = 1 << z, Tm = MERC_C / n;               // meters per tile
+  let minMx = Infinity, maxMx = -Infinity, minMy = Infinity, maxMy = -Infinity;
+  [[0, 0], [W, 0], [0, H], [W, H]].forEach(([sx, sy]) => {
+    const [wx, wy] = s2w(sx, sy);
+    const [mx, my] = netToMerc(wx, wy);
+    minMx = Math.min(minMx, mx); maxMx = Math.max(maxMx, mx);
+    minMy = Math.min(minMy, my); maxMy = Math.max(maxMy, my);
+  });
+  if (!isFinite(minMx)) return;
+  const tx0 = Math.max(0, Math.floor((minMx + MERC_C / 2) / Tm));
+  const tx1 = Math.min(n - 1, Math.floor((maxMx + MERC_C / 2) / Tm));
+  const ty0 = Math.max(0, Math.floor((MERC_C / 2 - maxMy) / Tm));
+  const ty1 = Math.min(n - 1, Math.floor((MERC_C / 2 - minMy) / Tm));
+  if (tx1 < tx0 || ty1 < ty0 || (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 4096) return;
+  ctx.save();
+  ctx.globalAlpha = g.opacity;
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const entry = getTile(src, z, tx, ty);
+      if (!entry.ready || entry.failed) continue;
+      const mx0 = tx * Tm - MERC_C / 2, myTop = MERC_C / 2 - ty * Tm;
+      const p0 = mercToScreen(mx0, myTop);          // image top-left (NW)
+      const p1 = mercToScreen(mx0 + Tm, myTop);     // image top-right (NE)
+      const p2 = mercToScreen(mx0, myTop - Tm);     // image bottom-left (SW)
+      ctx.save();
+      ctx.transform((p1[0] - p0[0]) / 256, (p1[1] - p0[1]) / 256, (p2[0] - p0[0]) / 256, (p2[1] - p0[1]) / 256, p0[0], p0[1]);
+      ctx.drawImage(entry.img, 0, 0, 256, 256);
+      ctx.restore();
+    }
+  }
+  ctx.restore();
 }
 
 function linkPoints(l) {
@@ -333,7 +432,13 @@ canvas.addEventListener('mousemove', (e) => {
   const [sx, sy] = mousePos(e);
   const [wx, wy] = s2w(sx, sy);
   state.mouse = { sx, sy, wx, wy };
-  $('coordReadout').textContent = `x ${wx.toFixed(1)}  y ${wy.toFixed(1)}`;
+  const geo = state.net.geo;
+  if (geo && geo.enabled) {
+    const [mx, my] = netToMerc(wx, wy);
+    $('coordReadout').textContent = `lat ${myToLat(my).toFixed(5)}  lon ${mxToLon(mx).toFixed(5)}`;
+  } else {
+    $('coordReadout').textContent = `x ${wx.toFixed(1)}  y ${wy.toFixed(1)}`;
+  }
   if (state.draft) { state.draft.wx = wx; state.draft.wy = wy; render(); }
   if (!state.drag) {
     const h = hitTest(sx, sy);
@@ -663,6 +768,59 @@ function buildSettings() {
 }
 function sectionTitle(txt) { const d = document.createElement('div'); d.className = 'prop-section-title'; d.textContent = txt; return d; }
 
+/* ============================ map panel / controls ============================ */
+function buildMapPanel() {
+  const p = $('mapPanel'); p.innerHTML = '';
+  const g = state.net.geo;
+  p.appendChild(sectionTitle(t('map.layer')));
+  p.appendChild(field(t('map.source'), selectInput(g.source, TILE_SOURCES.map(s => [s.id, t(s.nameKey)]), v => { g.source = v; markDirty(false); render(); updateAttribution(); })));
+  const op = document.createElement('input'); op.type = 'range'; op.min = '0'; op.max = '1'; op.step = '0.05'; op.value = g.opacity;
+  op.addEventListener('input', () => { g.opacity = parseFloat(op.value); render(); autosave(); });
+  p.appendChild(field(t('map.opacity'), op));
+
+  p.appendChild(sectionTitle(t('map.geo')));
+  const hint = document.createElement('div'); hint.className = 'map-hint'; hint.textContent = t('map.hint'); p.appendChild(hint);
+  const r1 = document.createElement('div'); r1.className = 'field-row';
+  r1.appendChild(field(t('map.lat'), numInput(g.lat, v => { g.lat = Math.max(-85, Math.min(85, v)); markDirty(false); render(); }, '0.0001')));
+  r1.appendChild(field(t('map.lon'), numInput(g.lon, v => { g.lon = Math.max(-180, Math.min(180, v)); markDirty(false); render(); }, '0.0001')));
+  p.appendChild(r1);
+  const r2 = document.createElement('div'); r2.className = 'field-row';
+  r2.appendChild(field(t('map.scale'), numInput(g.scale, v => { g.scale = Math.max(1e-6, v); markDirty(false); render(); }, '0.1')));
+  r2.appendChild(field(t('map.rot'), numInput(g.rot, v => { g.rot = v; markDirty(false); render(); }, '1')));
+  p.appendChild(r2);
+  p.appendChild(field(t('map.anchor'), selectInput(g.anchorNode, [['', t('map.anchorOrigin')], ...nodeOptions()], v => {
+    g.anchorNode = v;
+    if (v) { const n = nodeById(v); if (n) { g.ax = n.x; g.ay = n.y; } }
+    else { g.ax = 0; g.ay = 0; }
+    markDirty(false); buildMapPanel(); render();
+  })));
+  const fit = document.createElement('button'); fit.className = 'btn btn-sm'; fit.textContent = t('map.fit');
+  fit.addEventListener('click', fitView); p.appendChild(fit);
+}
+function updateAttribution() {
+  const el = $('mapAttribution'); const g = state.net.geo;
+  if (g && g.enabled) { el.textContent = tileSource(g.source).attr; el.hidden = false; }
+  else el.hidden = true;
+}
+function syncMapUI() {
+  const g = state.net.geo;
+  $('btnMapToggle').classList.toggle('active', !!(g && g.enabled));
+  updateAttribution();
+  if (!$('mapPanel').hidden) buildMapPanel();
+}
+$('btnMapToggle').addEventListener('click', () => {
+  const g = state.net.geo;
+  g.enabled = !g.enabled;
+  markDirty(false); syncMapUI(); render();
+  toast(g.enabled ? t('toast.mapOn') : t('toast.mapOff'));
+});
+$('btnMapSettings').addEventListener('click', () => {
+  const p = $('mapPanel');
+  p.hidden = !p.hidden;
+  $('btnMapSettings').classList.toggle('active', !p.hidden);
+  if (!p.hidden) buildMapPanel();
+});
+
 /* ============================ data modal ============================ */
 function openData() {
   const pl = $('patternList'); pl.innerHTML = '';
@@ -835,9 +993,10 @@ function loadNetwork(net) {
   net.options = { ...DEFAULT_OPTIONS, ...(net.options || {}) };
   net.times = { ...DEFAULT_TIMES, ...(net.times || {}) };
   net.quality = { type: 'NONE', chemName: 'Chlorine', chemUnits: 'mg/L', traceNode: '', ...(net.quality || {}) };
+  net.geo = { ...defaultGeo(), ...(net.geo || {}) };
   net.nodes.forEach(n => { n.vertices = n.vertices || []; });
   net.links.forEach(l => { l.vertices = l.vertices || []; });
-  state.net = net; select(null); clearResults(); buildSettings(); renderElemList(); render(); autosave();
+  state.net = net; select(null); clearResults(); buildSettings(); renderElemList(); syncMapUI(); render(); autosave();
 }
 function newNetwork() { loadNetwork(emptyNetwork()); fitView(); toast(t('toast.newNet')); }
 
@@ -913,6 +1072,8 @@ function updateRunButton() {
 function refreshLangUI() {
   updateEngineBadge(); updateRunButton();
   setTool(state.tool); renderElemList(); buildPropsForm(); buildSettings();
+  if (!$('mapPanel').hidden) buildMapPanel();
+  updateAttribution();
   if (state.results) {
     renderTables(); renderLegend(); updateTimeUI();
     $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
@@ -924,7 +1085,7 @@ document.addEventListener('langchange', () => { $('langSelect').value = LANG; re
 
 /* ============================ init ============================ */
 async function init() {
-  buildSettings(); renderElemList(); updateRunButton();
+  buildSettings(); renderElemList(); updateRunButton(); syncMapUI();
   try {
     const h = await api('/api/health');
     state.engineVersion = h.version;

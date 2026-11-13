@@ -166,6 +166,23 @@ select {
   color: var(--text-dim); background: rgba(255,255,255,.85); padding: 3px 8px; border-radius: 5px;
   border: 1px solid var(--border); pointer-events: none;
 }
+.map-ctl { position: absolute; right: 12px; top: 12px; display: flex; flex-direction: column; gap: 5px; }
+.map-ctl .btn { box-shadow: var(--shadow); }
+.map-ctl .btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.map-panel {
+  position: absolute; right: 12px; top: 86px; width: 240px; max-height: calc(100% - 110px);
+  overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: var(--shadow); padding: 12px; z-index: 5;
+}
+.map-panel .prop-section-title:first-child { margin-top: 0; }
+.map-panel .btn-sm { width: 100%; margin-top: 4px; }
+.map-hint { font-size: 11px; color: var(--text-faint); line-height: 1.5; margin-bottom: 10px; }
+.map-attribution {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+  background: rgba(255,255,255,.85); padding: 2px 8px; border-radius: 5px; border: 1px solid var(--border);
+  pointer-events: none; max-width: 80%; text-align: center;
+}
 
 /* ---------- right panel ---------- */
 .rtabs { padding-top: 8px; border-bottom: 1px solid var(--border); }
