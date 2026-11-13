@@ -11,17 +11,19 @@ import (
 
 	"epanet-web/epanet"
 	"epanet-web/model"
+	"epanet-web/pool"
 )
 
 const maxBody = 16 << 20 // 16 MB request cap
 
 // New builds the HTTP handler. static is the web UI filesystem rooted at the
-// directory that contains index.html.
-func New(static fs.FS) http.Handler {
+// directory that contains index.html. p is the simulation worker pool; when nil,
+// simulations run serially in-process.
+func New(static fs.FS, p *pool.Pool) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/health", handleHealth)
+	mux.HandleFunc("/api/health", handleHealth(p))
 	mux.HandleFunc("/api/example", handleExample)
-	mux.HandleFunc("/api/simulate", handleSimulate)
+	mux.HandleFunc("/api/simulate", handleSimulate(p))
 	mux.HandleFunc("/api/import", handleImport)
 	mux.HandleFunc("/api/export", handleExport)
 	mux.Handle("/", http.FileServer(http.FS(static)))
@@ -53,34 +55,48 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = enc.Encode(v)
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	ver := 0
-	if epanet.Ready() {
-		ver, _ = epanet.Version()
+func handleHealth(p *pool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ver := 0
+		if epanet.Ready() {
+			ver, _ = epanet.Version()
+		}
+		m := map[string]any{"ready": epanet.Ready(), "version": ver}
+		if p != nil {
+			size, idle := p.Stats()
+			m["workers"] = size
+			m["idle"] = idle
+		}
+		writeJSON(w, m)
 	}
-	writeJSON(w, map[string]any{"ready": epanet.Ready(), "version": ver})
 }
 
 func handleExample(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, model.Example())
 }
 
-func handleSimulate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
-		return
+func handleSimulate(p *pool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		defer recoverTo(w)
+		var net model.Network
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&net); err != nil {
+			writeJSON(w, &model.SimResult{Error: "请求 JSON 解析失败: " + err.Error()})
+			return
+		}
+		if len(net.Nodes) == 0 {
+			writeJSON(w, &model.SimResult{Error: "管网为空：请先添加节点"})
+			return
+		}
+		if p == nil {
+			writeJSON(w, RunSimulation(&net))
+			return
+		}
+		writeJSON(w, p.Submit(&net))
 	}
-	defer recoverTo(w)
-	var net model.Network
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&net); err != nil {
-		writeJSON(w, &model.SimResult{Error: "请求 JSON 解析失败: " + err.Error()})
-		return
-	}
-	if len(net.Nodes) == 0 {
-		writeJSON(w, &model.SimResult{Error: "管网为空：请先添加节点"})
-		return
-	}
-	writeJSON(w, RunSimulation(&net))
 }
 
 func handleImport(w http.ResponseWriter, r *http.Request) {
