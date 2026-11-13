@@ -374,7 +374,7 @@ canvas.addEventListener('wheel', (e) => {
   const [sx, sy] = mousePos(e);
   const [wx, wy] = s2w(sx, sy);
   const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-  state.view.scale = Math.max(0.05, Math.min(20, state.view.scale * factor));
+  state.view.scale = Math.max(0.05, state.view.scale * factor);
   state.view.panX = sx - wx * state.view.scale;
   state.view.panY = sy + wy * state.view.scale;
   render();
@@ -892,7 +892,7 @@ $('btnZoomOut').addEventListener('click', () => zoomBtn(1 / 1.2));
 $('btnFit').addEventListener('click', fitView);
 function zoomBtn(f) {
   const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2; const [wx, wy] = s2w(cx, cy);
-  state.view.scale = Math.max(0.05, Math.min(20, state.view.scale * f));
+  state.view.scale = Math.max(0.05, state.view.scale * f);
   state.view.panX = cx - wx * state.view.scale; state.view.panY = cy + wy * state.view.scale; render();
 }
 window.addEventListener('resize', resize);
