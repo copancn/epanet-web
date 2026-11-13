@@ -24,6 +24,7 @@ func New(static fs.FS, p *pool.Pool) http.Handler {
 	mux.HandleFunc("/api/health", handleHealth(p))
 	mux.HandleFunc("/api/example", handleExample)
 	mux.HandleFunc("/api/simulate", handleSimulate(p))
+	mux.HandleFunc("/api/report", handleReport)
 	mux.HandleFunc("/api/import", handleImport)
 	mux.HandleFunc("/api/export", handleExport)
 	mux.Handle("/", http.FileServer(http.FS(static)))
@@ -97,6 +98,24 @@ func handleSimulate(p *pool.Pool) http.HandlerFunc {
 		}
 		writeJSON(w, p.Submit(&net))
 	}
+}
+
+func handleReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	defer recoverTo(w)
+	var net model.Network
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&net); err != nil {
+		writeJSON(w, &model.SimResult{Error: "请求 JSON 解析失败: " + err.Error()})
+		return
+	}
+	if len(net.Nodes) == 0 {
+		writeJSON(w, &model.SimResult{Error: "管网为空：请先添加节点"})
+		return
+	}
+	writeJSON(w, RunSimulationReport(&net))
 }
 
 func handleImport(w http.ResponseWriter, r *http.Request) {

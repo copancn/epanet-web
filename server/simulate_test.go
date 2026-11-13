@@ -125,3 +125,74 @@ func TestINPRoundTrip(t *testing.T) {
 		t.Fatalf("re-simulation of parsed INP failed: %s", res.Error)
 	}
 }
+
+func TestAdvancedFeatures(t *testing.T) {
+	net := advancedNet()
+	res := RunSimulationReport(net)
+	if !res.OK {
+		t.Fatalf("advanced simulation failed: %s", res.Error)
+	}
+	if res.Statistics == nil {
+		t.Fatal("statistics missing")
+	}
+	if res.Report == "" {
+		t.Fatalf("report empty; warnings=%v error=%s", res.Warnings, res.Error)
+	}
+	var tank *model.NodeSeries
+	var pump *model.LinkSeries
+	var junc *model.NodeSeries
+	for i := range res.Nodes {
+		if res.Nodes[i].Type == "TANK" {
+			tank = &res.Nodes[i]
+		}
+		if res.Nodes[i].Type == "JUNCTION" && junc == nil {
+			junc = &res.Nodes[i]
+		}
+	}
+	for i := range res.Links {
+		if res.Links[i].Type == "PUMP" {
+			pump = &res.Links[i]
+		}
+	}
+	if tank == nil || len(tank.Level) != len(res.Times) || len(tank.Volume) != len(res.Times) {
+		t.Fatalf("tank level/volume missing: %+v", tank)
+	}
+	if pump == nil || len(pump.Energy) != len(res.Times) || len(pump.Efficiency) != len(res.Times) || len(pump.Power) != len(res.Times) {
+		t.Fatalf("pump energy/efficiency/power missing: %+v", pump)
+	}
+	if junc == nil || len(junc.DemandDeficit) != len(res.Times) {
+		t.Fatalf("junction demand deficit missing: %+v", junc)
+	}
+	t.Logf("stats=%+v reportLen=%d tankLevel0=%.2f pumpEnergyLast=%.3f warnings=%v",
+		res.Statistics, len(res.Report), tank.Level[0], pump.Energy[len(res.Times)-1], res.Warnings)
+}
+
+func advancedNet() *model.Network {
+	net := model.Example()
+	net.Curves = append(net.Curves, model.Curve{ID: "EffCurve", Type: "EFFICIENCY",
+		Points: []model.Point{{X: 0, Y: 50}, {X: 40, Y: 75}, {X: 80, Y: 60}}})
+	for i := range net.Links {
+		switch net.Links[i].ID {
+		case "PUMP1":
+			net.Links[i].EffCurve = "EffCurve"
+			net.Links[i].Price = 0.12
+		case "P1":
+			net.Links[i].KBulk = -0.3
+			net.Links[i].KWall = -0.1
+		}
+	}
+	net.Energy = model.Energy{GlobalEfficiency: 75, GlobalPrice: 0.1}
+	net.DemandModel = model.DemandModel{Type: "PDA", Pmin: 0, Preq: 20, Pexp: 0.5}
+	net.Quality = model.Quality{Type: "CHEM", ChemName: "Chlorine", ChemUnits: "mg/L"}
+	net.Reactions = model.Reactions{BulkOrder: 1, GlobalBulk: -0.3}
+	for i := range net.Nodes {
+		switch net.Nodes[i].ID {
+		case "R1":
+			net.Nodes[i].SourceType = "CONCEN"
+			net.Nodes[i].SourceQual = 1.0
+		case "T1":
+			net.Nodes[i].MixModel = "MIX1"
+		}
+	}
+	return net
+}

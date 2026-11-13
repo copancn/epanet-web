@@ -50,21 +50,31 @@ const (
 
 // Node properties.
 const (
-	NElevation  = 0
-	NBaseDemand = 1
-	NPattern    = 2
-	NTankLevel  = 8
-	NDemand     = 9
-	NHead       = 10
-	NPressure   = 11
-	NQuality    = 12
-	NInitVolume = 14
-	NTankDiam   = 17
-	NMinVolume  = 18
-	NMinLevel   = 20
-	NMaxLevel   = 21
-	NTankVolume = 24
-	NMaxVolume  = 25
+	NElevation    = 0
+	NBaseDemand   = 1
+	NPattern      = 2
+	NEmitter      = 3
+	NInitQual     = 4
+	NSourceQual   = 5
+	NSourcePat    = 6
+	NSourceType   = 7
+	NTankLevel    = 8
+	NDemand       = 9
+	NHead         = 10
+	NPressure     = 11
+	NQuality      = 12
+	NInitVolume   = 14
+	NMixModel     = 15
+	NTankDiam     = 17
+	NMinVolume    = 18
+	NMinLevel     = 20
+	NMaxLevel     = 21
+	NMixFraction  = 22
+	NTankKBulk    = 23
+	NTankVolume   = 24
+	NMaxVolume    = 25
+	NCanOverflow  = 26
+	NDemandDeficit = 27
 )
 
 // Link properties.
@@ -75,6 +85,8 @@ const (
 	LMinorLoss  = 3
 	LInitStatus = 4
 	LInitSet    = 5
+	LKBulk      = 6
+	LKWall      = 7
 	LFlow       = 8
 	LVelocity   = 9
 	LHeadLoss   = 10
@@ -83,7 +95,23 @@ const (
 	LEnergy     = 13
 	LQuality    = 14
 	LPumpState  = 16
+	LPumpEffic  = 17
 	LPumpPower  = 18
+	LLeakArea   = 26
+	LLeakExpan  = 27
+	LValveType  = 29
+)
+
+// Analysis statistic types (ENgetstatistic).
+const (
+	StatIterations     = 0
+	StatRelativeError  = 1
+	StatMaxHeadError   = 2
+	StatMaxFlowChange  = 3
+	StatMassBalance    = 4
+	StatDeficientNodes = 5
+	StatDemandReduction = 6
+	StatLeakageLoss    = 7
 )
 
 // Time parameters.
@@ -136,7 +164,7 @@ var procNames = []string{
 	"ENgetcount", "ENgetnodeid", "ENgetlinkid", "ENgetnodetype", "ENgetlinktype",
 	"ENgetnodeindex", "ENgetlinkindex", "ENgetlinknodes", "ENgetcoord",
 	"ENgetnodevalue", "ENgetlinkvalue", "ENgetflowunits", "ENgettimeparam",
-	"ENgetoption", "ENreport", "ENgetqualtype",
+	"ENgetoption", "ENreport", "ENgetqualtype", "ENgetstatistic",
 }
 
 // Init loads the EPANET shared library from dllPath. It is safe to call once
@@ -356,4 +384,11 @@ func QualType() (int, int, error) {
 	var qt, tn int32
 	err := call("ENgetqualtype", uintptr(unsafe.Pointer(&qt)), uintptr(unsafe.Pointer(&tn)))
 	return int(qt), int(tn), err
+}
+
+// Statistic reads an analysis statistic (see Stat* constants) after a solve.
+func Statistic(code int) (float64, error) {
+	var fb uint32
+	err := call("ENgetstatistic", uintptr(code), uintptr(unsafe.Pointer(&fb)))
+	return float64(math.Float32frombits(fb)), err
 }

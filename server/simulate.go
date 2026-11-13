@@ -12,6 +12,16 @@ import (
 // the given network and returns a per-period time series. The entire EPANET
 // session is serialized under the global lock.
 func RunSimulation(net *model.Network) *model.SimResult {
+	return runSim(net, false)
+}
+
+// RunSimulationReport is like RunSimulation but also generates the EPANET
+// text report (summary + energy usage).
+func RunSimulationReport(net *model.Network) *model.SimResult {
+	return runSim(net, true)
+}
+
+func runSim(net *model.Network, withReport bool) *model.SimResult {
 	epanet.Lock()
 	defer epanet.Unlock()
 
@@ -61,9 +71,27 @@ func RunSimulation(net *model.Network) *model.SimResult {
 	if warn != "" {
 		res.Warnings = append(res.Warnings, "水力: "+warn)
 	}
-	if err := epanet.SaveH(); err != nil {
+
+	// Populate the binary output file, which sets the engine's SaveQflag
+	// required by ENreport. For a water-quality report run the quality solver
+	// (it saves output too); otherwise transfer the hydraulic results.
+	if withReport && qualityOn {
+		if _, qerr := epanet.SolveQ(); qerr != nil {
+			res.Warnings = append(res.Warnings, "水质: "+qerr.Error())
+		}
+	} else if err := epanet.SaveH(); err != nil {
 		res.Error = "保存水力结果失败: " + err.Error()
 		return res
+	}
+
+	// Generate the report now, before readSeries re-initializes the solvers
+	// and clears SaveQflag.
+	if withReport {
+		if err := epanet.Report(); err != nil {
+			res.Warnings = append(res.Warnings, "报告: "+err.Error())
+		} else if data, rerr := os.ReadFile(rptPath); rerr == nil {
+			res.Report = string(data)
+		}
 	}
 
 	qwarn, err := readSeries(nodes, links, &res.Times, qualityOn)
@@ -75,10 +103,59 @@ func RunSimulation(net *model.Network) *model.SimResult {
 		res.Warnings = append(res.Warnings, "水质: "+qwarn)
 	}
 
+	res.Statistics = readStatistics()
+
 	res.Nodes = nodes
 	res.Links = links
 	res.OK = true
 	return res
+}
+
+// readStatistics collects engine analysis statistics; nil if unavailable.
+func readStatistics() *model.Statistics {
+	it, err := epanet.Statistic(epanet.StatIterations)
+	if err != nil {
+		return nil
+	}
+	s := &model.Statistics{Iterations: int(it)}
+	if v, e := epanet.Statistic(epanet.StatRelativeError); e == nil {
+		s.RelativeError = v
+	}
+	if v, e := epanet.Statistic(epanet.StatMaxHeadError); e == nil {
+		s.MaxHeadError = v
+	}
+	if v, e := epanet.Statistic(epanet.StatMaxFlowChange); e == nil {
+		s.MaxFlowChange = v
+	}
+	if v, e := epanet.Statistic(epanet.StatMassBalance); e == nil {
+		s.MassBalance = v
+	}
+	if v, e := epanet.Statistic(epanet.StatDeficientNodes); e == nil {
+		s.DeficientNodes = int(v)
+	}
+	if v, e := epanet.Statistic(epanet.StatDemandReduction); e == nil {
+		s.DemandReduction = v
+	}
+	if v, e := epanet.Statistic(epanet.StatLeakageLoss); e == nil {
+		s.LeakageLoss = v
+	}
+	return s
+}
+
+// sanitize maps the EPANET MISSING sentinel (-1e10) to zero.
+func sanitize(v float64) float64 {
+	if v < -1e9 || v > 1e9 {
+		return 0
+	}
+	return v
+}
+
+func isValveType(t string) bool {
+	switch t {
+	case "PRV", "PSV", "PBV", "FCV", "TCV", "GPV", "PCV":
+		return true
+	}
+	return false
 }
 
 func inventory() ([]model.NodeSeries, []model.LinkSeries, error) {
@@ -142,6 +219,11 @@ func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int
 			return qWarn, err
 		}
 		*times = append(*times, t)
+		prevT := int64(0)
+		if len(*times) >= 2 {
+			prevT = (*times)[len(*times)-2]
+		}
+		dtHours := float64(t-prevT) / 3600.0
 		for i := range nodes {
 			nd := &nodes[i]
 			p, _ := epanet.NodeValue(nd.Index, epanet.NPressure)
@@ -150,6 +232,16 @@ func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int
 			nd.Pressure = append(nd.Pressure, p)
 			nd.Head = append(nd.Head, h)
 			nd.Demand = append(nd.Demand, d)
+			switch nd.Type {
+			case "TANK":
+				lv, _ := epanet.NodeValue(nd.Index, epanet.NTankLevel)
+				vol, _ := epanet.NodeValue(nd.Index, epanet.NTankVolume)
+				nd.Level = append(nd.Level, lv)
+				nd.Volume = append(nd.Volume, vol)
+			case "JUNCTION":
+				dd, _ := epanet.NodeValue(nd.Index, epanet.NDemandDeficit)
+				nd.DemandDeficit = append(nd.DemandDeficit, sanitize(dd))
+			}
 		}
 		for i := range links {
 			lk := &links[i]
@@ -161,6 +253,27 @@ func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int
 			lk.Velocity = append(lk.Velocity, v)
 			lk.HeadLoss = append(lk.HeadLoss, hl)
 			lk.Status = append(lk.Status, st)
+			switch {
+			case lk.Type == "PUMP":
+				ps, _ := epanet.LinkValue(lk.Index, epanet.LPumpState)
+				// EN_ENERGY returns instantaneous operating power (kW), not
+				// cumulative kWh; EN_PUMP_EFFIC returns a 0..1 fraction.
+				kw, _ := epanet.LinkValue(lk.Index, epanet.LEnergy)
+				ef, _ := epanet.LinkValue(lk.Index, epanet.LPumpEffic)
+				sp, _ := epanet.LinkValue(lk.Index, epanet.LSetting)
+				lk.PumpState = append(lk.PumpState, ps)
+				lk.Power = append(lk.Power, kw)
+				lk.Efficiency = append(lk.Efficiency, ef*100)
+				lk.Setting = append(lk.Setting, sp)
+				prevKWh := 0.0
+				if n := len(lk.Energy); n > 0 {
+					prevKWh = lk.Energy[n-1]
+				}
+				lk.Energy = append(lk.Energy, prevKWh+kw*dtHours)
+			case isValveType(lk.Type):
+				se, _ := epanet.LinkValue(lk.Index, epanet.LSetting)
+				lk.Setting = append(lk.Setting, se)
+			}
 		}
 		if qActive {
 			if _, err := epanet.RunQ(); err != nil {

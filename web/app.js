@@ -3,12 +3,16 @@
 /* ============================ state ============================ */
 const DEFAULT_OPTIONS = { flowUnits: 'LPS', headLoss: 'H-W', demandMult: 1, trials: 40, accuracy: 0.001, tolerance: 0.01, unbalanced: 10 };
 const DEFAULT_TIMES = { duration: 86400, hydStep: 3600, qualStep: 300, patternStep: 3600, patternStart: 0, reportStep: 3600, reportStart: 0, startClock: 0, statistic: 'NONE' };
+const DEFAULT_REACTIONS = { bulkOrder: 0, wallOrder: 0, tankOrder: 0, globalBulk: 0, globalWall: 0, limitingPot: 0, roughCorrel: 0 };
+const DEFAULT_ENERGY = { globalEfficiency: 0, globalPrice: 0, pricePattern: '', demandCharge: 0 };
+const DEFAULT_DEMAND_MODEL = { type: 'DDA', pmin: 0, preq: 20, pexp: 0.5 };
 
 function emptyNetwork() {
   return {
-    title: t('net.newTitle'), nodes: [], links: [], patterns: [], curves: [], controls: [],
+    title: t('net.newTitle'), nodes: [], links: [], patterns: [], curves: [], controls: [], rules: [],
     options: { ...DEFAULT_OPTIONS }, times: { ...DEFAULT_TIMES },
     quality: { type: 'NONE', chemName: 'Chlorine', chemUnits: 'mg/L', traceNode: '' },
+    reactions: { ...DEFAULT_REACTIONS }, energy: { ...DEFAULT_ENERGY }, demandModel: { ...DEFAULT_DEMAND_MODEL },
     geo: defaultGeo(),
   };
 }
@@ -35,7 +39,7 @@ const state = {
   theme: 'light',
 };
 
-const VALVE_TYPES = ['PRV', 'PSV', 'PBV', 'FCV', 'TCV', 'GPV'];
+const VALVE_TYPES = ['PRV', 'PSV', 'PBV', 'FCV', 'TCV', 'GPV', 'PCV'];
 const PALETTES = {
   light: {
     grid: '#eef2f7',
@@ -291,7 +295,7 @@ function drawLink(l) {
         color = rs.status[t] > 0.5 ? pal().statusOpen : pal().statusClosed;
       } else {
         const r = metricRange(state.results.links, state.linkColor);
-        color = colorScale(norm(rs[state.linkColor][t], r));
+        color = colorScale(norm(metricAt(rs, state.linkColor, t), r));
       }
       width = 3;
     }
@@ -385,7 +389,7 @@ function drawNode(n) {
   let fill = nodeColorBase(n.type);
   if (rs && state.colorByValue) {
     const r = metricRange(state.results.nodes, state.nodeColor);
-    fill = colorScale(norm(rs[state.nodeColor][state.timeIndex], r));
+    fill = colorScale(norm(metricAt(rs, state.nodeColor, state.timeIndex), r));
   }
   if (hovered && !selected) {
     ctx.fillStyle = p.hoverFill;
@@ -415,7 +419,7 @@ function drawNode(n) {
     ctx.textAlign = 'center';
     haloText(n.id, sx, sy + 20);
     if (rs) {
-      const v = rs[state.nodeColor][state.timeIndex];
+      const v = metricAt(rs, state.nodeColor, state.timeIndex);
       ctx.fillStyle = p.labelDim; ctx.font = '9px Consolas, monospace';
       haloText(fmt(v), sx, sy + 31);
     }
@@ -448,9 +452,10 @@ function colorScale(t) {
   return SCALE[SCALE.length - 1][1];
 }
 function norm(v, r) { return r.max > r.min ? (v - r.min) / (r.max - r.min) : 0.5; }
+function metricAt(rs, key, ti) { const a = rs && rs[key]; return a ? a[ti] : NaN; }
 const _rangeCache = {};
 function metricRange(series, key) {
-  const ck = key + ':' + series.length + ':' + (series[0] ? series[0][key].length : 0);
+  const ck = key + ':' + series.length + ':' + (series[0] && series[0][key] ? series[0][key].length : 0);
   if (_rangeCache[ck]) return _rangeCache[ck];
   let min = Infinity, max = -Infinity;
   series.forEach(s => (s[key] || []).forEach(v => { if (v < min) min = v; if (v > max) max = v; }));
@@ -594,12 +599,18 @@ function tipContent(hit) {
         rows.push([t('m.pressure'), fmt(rs.pressure[ti]), u.pressure]);
         rows.push([t('m.head'), fmt(rs.head[ti]), u.head]);
         rows.push([t('m.demand'), fmt(rs.demand[ti]), u.flow]);
+        if (rs.level) rows.push([t('m.level'), fmt(rs.level[ti]), u.head]);
+        if (rs.volume) rows.push([t('m.volume'), fmt(rs.volume[ti]), 'm³']);
+        if (rs.demandDeficit && rs.demandDeficit[ti] > 0) rows.push([t('m.deficit'), fmt(rs.demandDeficit[ti]), u.flow]);
         if (u.quality) rows.push([t('m.quality'), fmt(rs.quality[ti]), u.quality]);
       } else {
         rows.push([t('m.flow'), fmt(rs.flow[ti]), u.flow]);
         rows.push([t('m.velocity'), fmt(rs.velocity[ti]), u.velocity]);
         rows.push([t('m.headloss'), fmt(rs.headloss[ti]), u.headloss]);
         rows.push([t('m.status'), rs.status[ti] > 0.5 ? t('status.open') : t('status.closed'), '']);
+        if (rs.energy) rows.push([t('m.energy'), fmt(rs.energy[ti]), 'kWh']);
+        if (rs.efficiency) rows.push([t('m.efficiency'), fmt(rs.efficiency[ti]), '%']);
+        if (rs.setting && rs.type !== 'PUMP') rows.push([t('m.setting'), fmt(rs.setting[ti]), '']);
       }
     }
   } else if (hit.kind === 'node') {
@@ -795,6 +806,56 @@ function selectInput(val, opts, onch) {
 function patternOptions() { return [['', t('opt.none')], ...state.net.patterns.map(p => [p.id, p.id])]; }
 function curveOptions() { return [['', t('opt.none')], ...state.net.curves.map(c => [c.id, c.id])]; }
 function nodeOptions() { return state.net.nodes.map(n => [n.id, n.id]); }
+function checkInput(val, onch) {
+  const i = document.createElement('input'); i.type = 'checkbox'; i.checked = !!val;
+  i.addEventListener('change', () => onch(i.checked)); return i;
+}
+function checkRow(label, val, onch) {
+  const l = document.createElement('label'); l.className = 'check-row';
+  l.appendChild(checkInput(val, onch)); l.appendChild(document.createTextNode(label)); return l;
+}
+function sourceFields(obj) {
+  const wrap = document.createElement('div');
+  wrap.appendChild(sectionTitle(t('prop.source')));
+  wrap.appendChild(field(t('prop.sourceType'), selectInput(obj.sourceType || '', [['', t('opt.none')], ['CONCEN', t('src.concen')], ['MASS', t('src.mass')], ['SETPOINT', t('src.setpoint')], ['FLOWPACED', t('src.flowpaced')]], v => { obj.sourceType = v; markDirty(false); })));
+  const r = document.createElement('div'); r.className = 'field-row';
+  r.appendChild(field(t('prop.sourceQual'), numInput(obj.sourceQual, v => { obj.sourceQual = v; markDirty(false); })));
+  r.appendChild(field(t('prop.sourcePat'), selectInput(obj.sourcePattern, patternOptions(), v => { obj.sourcePattern = v; markDirty(false); })));
+  wrap.appendChild(r);
+  return wrap;
+}
+function tagCommentFields(obj) {
+  const wrap = document.createElement('div');
+  wrap.appendChild(field(t('prop.tag'), textInput(obj.tag, v => { obj.tag = v; markDirty(false); })));
+  wrap.appendChild(field(t('prop.comment'), textInput(obj.comment, v => { obj.comment = v; markDirty(false); })));
+  return wrap;
+}
+function demandsEditor(obj) {
+  const wrap = document.createElement('div');
+  wrap.appendChild(sectionTitle(t('prop.demands')));
+  const list = document.createElement('div'); wrap.appendChild(list);
+  function rebuild() {
+    list.innerHTML = '';
+    (obj.demands || []).forEach((d, idx) => {
+      const card = document.createElement('div'); card.className = 'demand-card';
+      const r1 = document.createElement('div'); r1.className = 'field-row';
+      r1.appendChild(field(t('prop.demandBase'), numInput(d.base, v => { d.base = v; markDirty(false); })));
+      r1.appendChild(field(t('prop.demandPat'), selectInput(d.pattern, patternOptions(), v => { d.pattern = v; markDirty(false); })));
+      card.appendChild(r1);
+      const r2 = document.createElement('div'); r2.className = 'field-row';
+      r2.appendChild(field(t('prop.demandName'), textInput(d.name, v => { d.name = v; markDirty(false); })));
+      const del = document.createElement('button'); del.className = 'dc-del'; del.textContent = '✕'; del.title = t('prop.delete');
+      del.addEventListener('click', () => { obj.demands.splice(idx, 1); markDirty(false); rebuild(); });
+      const delWrap = document.createElement('div'); delWrap.className = 'field'; delWrap.style.alignSelf = 'flex-end'; delWrap.appendChild(del);
+      r2.appendChild(delWrap);
+      card.appendChild(r2);
+      list.appendChild(card);
+    });
+  }
+  rebuild();
+  wrap.appendChild(btnSm(t('prop.addDemand'), () => { obj.demands = obj.demands || []; obj.demands.push({ base: 0, pattern: '', name: '' }); markDirty(false); rebuild(); }));
+  return wrap;
+}
 
 function buildPropsForm() {
   const form = $('propsForm'); const empty = $('propsEmpty');
@@ -820,6 +881,8 @@ function buildPropsForm() {
       form.appendChild(field(t('prop.elev'), numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
       form.appendChild(field(t('prop.baseDemand'), numInput(obj.demand, v => { obj.demand = v; markDirty(false); })));
       form.appendChild(field(t('prop.demandPat'), selectInput(obj.demandPattern, patternOptions(), v => { obj.demandPattern = v; markDirty(false); })));
+      form.appendChild(field(t('prop.emitter'), numInput(obj.emitter, v => { obj.emitter = v; markDirty(false); })));
+      form.appendChild(demandsEditor(obj));
     } else if (obj.type === 'RESERVOIR') {
       form.appendChild(field(t('prop.head'), numInput(obj.head, v => { obj.head = v; markDirty(false); })));
       form.appendChild(field(t('prop.headPat'), selectInput(obj.headPattern, patternOptions(), v => { obj.headPattern = v; markDirty(false); })));
@@ -835,9 +898,17 @@ function buildPropsForm() {
       form.appendChild(r2);
       form.appendChild(field(t('prop.minVol'), numInput(obj.minVol, v => { obj.minVol = v; markDirty(false); })));
       form.appendChild(field(t('prop.volCurve'), selectInput(obj.volCurve, curveOptions(), v => { obj.volCurve = v; markDirty(false); })));
+      const rm = document.createElement('div'); rm.className = 'field-row';
+      rm.appendChild(field(t('prop.mixModel'), selectInput(obj.mixModel || '', [['', t('order.default')], ['MIX1', t('mix.mix1')], ['MIX2', t('mix.mix2')], ['FIFO', t('mix.fifo')], ['LIFO', t('mix.lifo')]], v => { obj.mixModel = v; markDirty(false); })));
+      rm.appendChild(field(t('prop.mixFraction'), numInput(obj.mixFraction, v => { obj.mixFraction = v; markDirty(false); }, '0.05')));
+      form.appendChild(rm);
+      form.appendChild(field(t('prop.tankKBulk'), numInput(obj.tankKBulk, v => { obj.tankKBulk = v; markDirty(false); }, '0.01')));
+      form.appendChild(checkRow(t('prop.canOverflow'), obj.canOverflow, v => { obj.canOverflow = v; markDirty(false); }));
     }
     if (obj.type === 'JUNCTION' || obj.type === 'TANK') form.appendChild(demButton('sel'));
     form.appendChild(field(t('prop.initQual'), numInput(obj.initQual, v => { obj.initQual = v; markDirty(false); })));
+    form.appendChild(sourceFields(obj));
+    form.appendChild(tagCommentFields(obj));
   } else {
     const row = document.createElement('div'); row.className = 'field-row';
     row.appendChild(field(t('prop.from'), selectInput(obj.from, nodeOptions(), v => { obj.from = v; markDirty(true); render(); })));
@@ -849,18 +920,35 @@ function buildPropsForm() {
       form.appendChild(field(t('prop.rough'), numInput(obj.roughness, v => { obj.roughness = v; markDirty(false); })));
       form.appendChild(field(t('prop.minorLoss'), numInput(obj.minorLoss, v => { obj.minorLoss = v; markDirty(false); })));
       form.appendChild(field(t('prop.initStatus'), selectInput(obj.status, [['OPEN', t('status.open')], ['CLOSED', t('status.closed')], ['CV', t('status.cv')]], v => { obj.status = v; markDirty(false); render(); })));
+      const rk = document.createElement('div'); rk.className = 'field-row';
+      rk.appendChild(field(t('prop.kBulk'), numInput(obj.kBulk, v => { obj.kBulk = v; markDirty(false); }, '0.01')));
+      rk.appendChild(field(t('prop.kWall'), numInput(obj.kWall, v => { obj.kWall = v; markDirty(false); }, '0.01')));
+      form.appendChild(rk);
+      const rlk = document.createElement('div'); rlk.className = 'field-row';
+      rlk.appendChild(field(t('prop.leakArea'), numInput(obj.leakArea, v => { obj.leakArea = v; markDirty(false); })));
+      rlk.appendChild(field(t('prop.leakExpan'), numInput(obj.leakExpan, v => { obj.leakExpan = v; markDirty(false); }, '0.05')));
+      form.appendChild(rlk);
     } else if (obj.type === 'PUMP') {
       form.appendChild(field(t('prop.headCurve'), selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
       form.appendChild(field(t('prop.power'), numInput(obj.power, v => { obj.power = v; markDirty(false); })));
       form.appendChild(field(t('prop.speed'), numInput(obj.speed, v => { obj.speed = v; markDirty(false); }, '0.1')));
       form.appendChild(field(t('prop.speedPat'), selectInput(obj.speedPattern, patternOptions(), v => { obj.speedPattern = v; markDirty(false); })));
+      form.appendChild(field(t('prop.effCurve'), selectInput(obj.effCurve, curveOptions(), v => { obj.effCurve = v; markDirty(false); })));
+      const rp = document.createElement('div'); rp.className = 'field-row';
+      rp.appendChild(field(t('prop.price'), numInput(obj.price, v => { obj.price = v; markDirty(false); }, '0.01')));
+      rp.appendChild(field(t('prop.pricePat'), selectInput(obj.pricePattern, patternOptions(), v => { obj.pricePattern = v; markDirty(false); })));
+      form.appendChild(rp);
     } else {
       form.appendChild(field(t('prop.valveType'), selectInput(obj.type, VALVE_TYPES, v => { obj.type = v; markDirty(false); buildPropsForm(); render(); })));
       form.appendChild(field(t('prop.diamMm'), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
       if (obj.type === 'GPV') form.appendChild(field(t('prop.hlossCurve'), selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
-      else form.appendChild(field(t('prop.setting'), numInput(obj.setting, v => { obj.setting = v; markDirty(false); })));
+      else {
+        form.appendChild(field(t('prop.setting'), numInput(obj.setting, v => { obj.setting = v; markDirty(false); })));
+        if (obj.type === 'PCV') form.appendChild(field(t('prop.hlossCurve'), selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
+      }
       form.appendChild(field(t('prop.minorLoss'), numInput(obj.minorLoss, v => { obj.minorLoss = v; markDirty(false); })));
     }
+    form.appendChild(tagCommentFields(obj));
   }
 
   // result readout
@@ -879,7 +967,17 @@ function resultReadout(rs, isNode) {
   const rows = isNode
     ? [[t('m.pressure'), rs.pressure[ti], u.pressure], [t('m.head'), rs.head[ti], u.head], [t('m.demand'), rs.demand[ti], u.flow]]
     : [[t('m.flow'), rs.flow[ti], u.flow], [t('m.velocity'), rs.velocity[ti], u.velocity], [t('m.headloss'), rs.headloss[ti], u.headloss], [t('m.status'), rs.status[ti] > 0.5 ? t('status.open') : t('status.closed'), '']];
-  if (isNode && u.quality) rows.push([t('m.quality'), rs.quality[ti], u.quality]);
+  if (isNode) {
+    if (rs.level) rows.push([t('m.level'), rs.level[ti], u.head]);
+    if (rs.volume) rows.push([t('m.volume'), rs.volume[ti], 'm³']);
+    if (rs.demandDeficit) rows.push([t('m.deficit'), rs.demandDeficit[ti], u.flow]);
+    if (u.quality) rows.push([t('m.quality'), rs.quality[ti], u.quality]);
+  } else {
+    if (rs.setting && rs.type !== 'PUMP') rows.push([t('m.setting'), rs.setting[ti], '']);
+    if (rs.power) rows.push([t('m.power'), rs.power[ti], 'kW']);
+    if (rs.efficiency) rows.push([t('m.efficiency'), rs.efficiency[ti], '%']);
+    if (rs.energy) rows.push([t('m.energy'), rs.energy[ti], 'kWh']);
+  }
   box.innerHTML = `<div class="prop-section-title" style="margin-top:0">${esc(t('prop.currentResult'))}</div>` +
     rows.map(([k, v, un]) => `<div class="rr-row"><span>${esc(k)}</span><span>${typeof v === 'number' ? fmt(v) : esc(v)} ${un}</span></div>`).join('');
   return box;
@@ -924,6 +1022,10 @@ function buildSettings() {
   sc.addEventListener('change', () => { tm.startClock = clockToSec(sc.value); markDirty(false); });
   r3.appendChild(field(t('set.startClock'), sc));
   p.appendChild(r3);
+  const r4 = document.createElement('div'); r4.className = 'field-row';
+  r4.appendChild(field(t('set.qualStep'), numInput(tm.qualStep / 3600, v => { tm.qualStep = Math.max(1, Math.round(v * 3600)); markDirty(false); }, 'any')));
+  r4.appendChild(field(t('set.ruleStep'), numInput((tm.ruleStep || 0) / 3600, v => { tm.ruleStep = Math.max(0, Math.round(v * 3600)); markDirty(false); }, 'any')));
+  p.appendChild(r4);
   p.appendChild(field(t('set.statistic'), selectInput(tm.statistic, [['NONE', t('stat.series')], ['AVERAGED', t('stat.avg')], ['MINIMUM', t('stat.min')], ['MAXIMUM', t('stat.max')], ['RANGE', t('stat.range')]], v => { tm.statistic = v; markDirty(false); })));
 
   p.appendChild(sectionTitle(t('set.quality')));
@@ -937,6 +1039,70 @@ function buildSettings() {
   } else if (q.type === 'TRACE') {
     p.appendChild(field(t('set.traceNode'), selectInput(q.traceNode, [['', t('opt.select')], ...nodeOptions()], v => { q.traceNode = v; markDirty(false); })));
   }
+
+  const dm = state.net.demandModel;
+  p.appendChild(sectionTitle(t('set.demandModel')));
+  p.appendChild(field(t('set.demandModel'), selectInput(dm.type || 'DDA', [['DDA', t('set.dda')], ['PDA', t('set.pda')]], v => { dm.type = v; markDirty(false); buildSettings(); })));
+  if ((dm.type || 'DDA') === 'PDA') {
+    const rd = document.createElement('div'); rd.className = 'field-row';
+    rd.appendChild(field(t('set.pmin'), numInput(dm.pmin, v => { dm.pmin = v; markDirty(false); })));
+    rd.appendChild(field(t('set.preq'), numInput(dm.preq, v => { dm.preq = v; markDirty(false); })));
+    p.appendChild(rd);
+    p.appendChild(field(t('set.pexp'), numInput(dm.pexp, v => { dm.pexp = v; markDirty(false); }, '0.1')));
+  }
+
+  const rx = state.net.reactions;
+  p.appendChild(sectionTitle(t('set.reactions')));
+  const orderOpts = [[0, t('order.default')], [1, '1'], [2, '2']];
+  const ro = document.createElement('div'); ro.className = 'field-row';
+  ro.appendChild(field(t('set.bulkOrder'), selectInput(rx.bulkOrder || 0, orderOpts, v => { rx.bulkOrder = parseInt(v, 10); markDirty(false); })));
+  ro.appendChild(field(t('set.wallOrder'), selectInput(rx.wallOrder || 0, orderOpts, v => { rx.wallOrder = parseInt(v, 10); markDirty(false); })));
+  p.appendChild(ro);
+  p.appendChild(field(t('set.tankOrder'), selectInput(rx.tankOrder || 0, orderOpts, v => { rx.tankOrder = parseInt(v, 10); markDirty(false); })));
+  const rg = document.createElement('div'); rg.className = 'field-row';
+  rg.appendChild(field(t('set.globalBulk'), numInput(rx.globalBulk, v => { rx.globalBulk = v; markDirty(false); }, '0.01')));
+  rg.appendChild(field(t('set.globalWall'), numInput(rx.globalWall, v => { rx.globalWall = v; markDirty(false); }, '0.01')));
+  p.appendChild(rg);
+  const rl = document.createElement('div'); rl.className = 'field-row';
+  rl.appendChild(field(t('set.limitingPot'), numInput(rx.limitingPot, v => { rx.limitingPot = v; markDirty(false); })));
+  rl.appendChild(field(t('set.roughCorrel'), numInput(rx.roughCorrel, v => { rx.roughCorrel = v; markDirty(false); }, '0.01')));
+  p.appendChild(rl);
+
+  const en = state.net.energy;
+  p.appendChild(sectionTitle(t('set.energy')));
+  const re = document.createElement('div'); re.className = 'field-row';
+  re.appendChild(field(t('set.globalEffic'), numInput(en.globalEfficiency, v => { en.globalEfficiency = v; markDirty(false); }, '1')));
+  re.appendChild(field(t('set.globalPrice'), numInput(en.globalPrice, v => { en.globalPrice = v; markDirty(false); }, '0.01')));
+  p.appendChild(re);
+  const re2 = document.createElement('div'); re2.className = 'field-row';
+  re2.appendChild(field(t('set.pricePattern'), selectInput(en.pricePattern, patternOptions(), v => { en.pricePattern = v; markDirty(false); })));
+  re2.appendChild(field(t('set.demandCharge'), numInput(en.demandCharge, v => { en.demandCharge = v; markDirty(false); }, '0.01')));
+  p.appendChild(re2);
+
+  p.appendChild(sectionTitle(t('set.advanced')));
+  p.appendChild(field(t('set.pressureUnits'), selectInput(o.pressureUnits || '', [['', t('order.default')], ['PSI', 'PSI'], ['KPA', 'kPa'], ['METERS', 'm'], ['BAR', 'bar'], ['FEET', 'ft']], v => { o.pressureUnits = v; markDirty(false); })));
+  const ra = document.createElement('div'); ra.className = 'field-row';
+  ra.appendChild(field(t('set.specificGravity'), numInput(o.specificGravity, v => { o.specificGravity = v; markDirty(false); }, '0.01')));
+  ra.appendChild(field(t('set.viscosity'), numInput(o.viscosity, v => { o.viscosity = v; markDirty(false); }, '0.01')));
+  p.appendChild(ra);
+  const ra2 = document.createElement('div'); ra2.className = 'field-row';
+  ra2.appendChild(field(t('set.diffusivity'), numInput(o.diffusivity, v => { o.diffusivity = v; markDirty(false); }, '0.01')));
+  ra2.appendChild(field(t('set.emitterExponent'), numInput(o.emitterExponent, v => { o.emitterExponent = v; markDirty(false); }, '0.01')));
+  p.appendChild(ra2);
+  p.appendChild(field(t('set.defaultPattern'), selectInput(o.defaultPattern, patternOptions(), v => { o.defaultPattern = v; markDirty(false); })));
+  const rb = document.createElement('label'); rb.className = 'check-row';
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!o.emitterBackflow;
+  cb.addEventListener('change', () => { o.emitterBackflow = cb.checked; markDirty(false); });
+  rb.appendChild(cb); rb.appendChild(document.createTextNode(t('set.emitterBackflow'))); p.appendChild(rb);
+  const ra3 = document.createElement('div'); ra3.className = 'field-row';
+  ra3.appendChild(field(t('set.checkFreq'), numInput(o.checkFreq, v => { o.checkFreq = Math.round(v); markDirty(false); }, '1')));
+  ra3.appendChild(field(t('set.maxCheck'), numInput(o.maxCheck, v => { o.maxCheck = Math.round(v); markDirty(false); }, '1')));
+  p.appendChild(ra3);
+  const ra4 = document.createElement('div'); ra4.className = 'field-row';
+  ra4.appendChild(field(t('set.dampLimit'), numInput(o.dampLimit, v => { o.dampLimit = v; markDirty(false); }, '0.001')));
+  ra4.appendChild(field(t('set.headError'), numInput(o.headError, v => { o.headError = v; markDirty(false); }, '0.001')));
+  p.appendChild(ra4);
+  p.appendChild(field(t('set.flowChange'), numInput(o.flowChange, v => { o.flowChange = v; markDirty(false); }, '0.001')));
 }
 function sectionTitle(txt) { const d = document.createElement('div'); d.className = 'prop-section-title'; d.textContent = txt; return d; }
 
@@ -995,7 +1161,7 @@ $('btnMapSettings').addEventListener('click', () => {
 });
 
 /* ============================ graphical data editors ============================ */
-const CURVE_TYPES = ['PUMP', 'EFFICIENCY', 'VOLUME', 'HEADLOSS', 'GENERIC'];
+const CURVE_TYPES = ['PUMP', 'EFFICIENCY', 'VOLUME', 'HEADLOSS', 'VALVE', 'GENERIC'];
 const dataEditors = [];
 function btnSm(label, fn) { const b = document.createElement('button'); b.className = 'btn btn-sm'; b.textContent = label; b.addEventListener('click', fn); return b; }
 function linkOptions() { return state.net.links.map(l => [l.id, l.id]); }
@@ -1159,6 +1325,17 @@ function controlRow(rule) {
   rebuild();
   return row;
 }
+function ruleRow(text) {
+  const row = document.createElement('div'); row.className = 'data-card';
+  const head = document.createElement('div'); head.className = 'data-card-head';
+  head.appendChild(btnSm('✕', () => row.remove()));
+  row.appendChild(head);
+  const ta = document.createElement('textarea'); ta.className = 'rule-text'; ta.value = text || ''; ta.rows = 5;
+  ta.spellcheck = false; row.appendChild(ta);
+  const hint = document.createElement('div'); hint.className = 'ed-hint'; hint.textContent = t('rule.hint'); row.appendChild(hint);
+  row._ta = ta;
+  return row;
+}
 function openData() {
   $('dataModal').hidden = false;
   dataEditors.length = 0;
@@ -1168,6 +1345,8 @@ function openData() {
   state.net.curves.forEach(c => cl.appendChild(curveRow(c.id, c.type, c.points)));
   const ctl = $('controlList'); ctl.innerHTML = '';
   state.net.controls.forEach(line => ctl.appendChild(controlRow(parseControl(line))));
+  const rl = $('ruleList'); rl.innerHTML = '';
+  (state.net.rules || []).forEach(r => rl.appendChild(ruleRow(r)));
   redrawEditors();
 }
 function applyData() {
@@ -1177,12 +1356,15 @@ function applyData() {
   $('curveList').querySelectorAll('.data-card').forEach(r => { const id = r._idIn.value.trim(); if (!id) return; curves.push({ id, type: r._typeSel.value, points: r._ed._get() }); });
   const controls = [];
   $('controlList').querySelectorAll('.ctl-row').forEach(r => { const s = controlString(r._rule); if (s) controls.push(s); });
-  state.net.patterns = patterns; state.net.curves = curves; state.net.controls = controls;
+  const rules = [];
+  $('ruleList').querySelectorAll('.data-card').forEach(r => { const s = r._ta.value.trim(); if (s) rules.push(s); });
+  state.net.patterns = patterns; state.net.curves = curves; state.net.controls = controls; state.net.rules = rules;
   $('dataModal').hidden = true; markDirty(true); buildSettings(); toast(t('toast.dataApplied'), 'ok');
 }
 $('btnAddPattern').addEventListener('click', () => { const r = patternRow(genId('PAT', state.net.patterns), [1, 1, 1, 1]); $('patternList').appendChild(r); r._ed._redraw(); });
 $('btnAddCurve').addEventListener('click', () => { const r = curveRow(genId('C', state.net.curves), 'PUMP', [{ x: 0, y: 50 }, { x: 50, y: 30 }]); $('curveList').appendChild(r); r._ed._redraw(); });
 $('btnAddControl').addEventListener('click', () => { $('controlList').appendChild(controlRow({ link: (state.net.links[0] || {}).id || '', action: 'OPEN', setting: 0, cond: 'NODE', node: (state.net.nodes[0] || {}).id || '', op: 'BELOW', value: 0, clock: '06:00' })); });
+$('btnAddRule').addEventListener('click', () => { const n = (state.net.rules || []).length + 1; $('ruleList').appendChild(ruleRow(`RULE ${n}\nIF NODE ${(state.net.nodes[0] || {}).id || 'J1'} PRESSURE > 20\nTHEN LINK ${(state.net.links[0] || {}).id || 'P1'} STATUS = OPEN\nELSE LINK ${(state.net.links[0] || {}).id || 'P1'} STATUS = CLOSED`)); });
 $('btnData').addEventListener('click', openData);
 $('btnCloseData').addEventListener('click', () => { $('dataModal').hidden = true; });
 $('btnApplyData').addEventListener('click', applyData);
@@ -1211,7 +1393,7 @@ function showResults() {
   const slider = $('timeSlider'); slider.max = state.results.times.length - 1; slider.value = 0;
   if (state.results.units.quality) { $('nodeColor').querySelector('option[value=quality]').disabled = false; }
   else { $('nodeColor').querySelector('option[value=quality]').disabled = true; if (state.nodeColor === 'quality') { state.nodeColor = 'pressure'; $('nodeColor').value = 'pressure'; } }
-  updateTimeUI(); renderTables(); syncColorUI(); renderLegend(); buildPropsForm(); resize();
+  updateTimeUI(); renderTables(); renderStats(); renderReport(); syncColorUI(); renderLegend(); buildPropsForm(); resize();
   $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
 }
 function clearResults() {
@@ -1254,17 +1436,37 @@ function renderLegend() {
   if (!state.colorByValue) { el.innerHTML = `<span>${esc(t('rb.legendType'))}</span>`; return; }
   const u = state.results.units;
   const nr = metricRange(state.results.nodes, state.nodeColor);
-  const unit = state.nodeColor === 'pressure' ? u.pressure : state.nodeColor === 'head' ? u.head : state.nodeColor === 'demand' ? u.flow : u.quality;
+  const unit = metricUnit(state.nodeColor);
   const grad = `linear-gradient(90deg, ${SCALE.map(s => s[1]).join(',')})`;
   el.innerHTML = `<span>${labelFor(state.nodeColor)}</span><span class="legend-gradient" style="background:${grad}"></span><span>${fmt(nr.min)} ~ ${fmt(nr.max)} ${unit}</span>`;
 }
-function labelFor(k) { return t('m.' + k) !== 'm.' + k ? t('m.' + k) : k; }
+const METRIC_LABEL = { demandDeficit: 'deficit' };
+function labelFor(k) { const lk = METRIC_LABEL[k] || k; const s = t('m.' + lk); return s !== 'm.' + lk ? s : k; }
+function metricUnit(k) {
+  const u = state.results ? state.results.units : {};
+  switch (k) {
+    case 'pressure': return u.pressure;
+    case 'head': case 'level': return u.head;
+    case 'demand': case 'flow': case 'demandDeficit': return u.flow;
+    case 'velocity': return u.velocity;
+    case 'headloss': return u.headloss;
+    case 'quality': return u.quality || '';
+    case 'energy': return 'kWh';
+    case 'efficiency': return '%';
+    case 'power': return 'kW';
+    case 'volume': return 'm³';
+    default: return '';
+  }
+}
 
 /* ============================ result tables ============================ */
 document.querySelectorAll('.rptab').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.rptab').forEach(x => x.classList.toggle('active', x === b));
   const tab = b.dataset.rptab;
-  $('nodeTableWrap').hidden = tab !== 'nodes'; $('linkTableWrap').hidden = tab !== 'links'; $('warningsWrap').hidden = tab !== 'warnings';
+  $('nodeTableWrap').hidden = tab !== 'nodes'; $('linkTableWrap').hidden = tab !== 'links';
+  $('statsWrap').hidden = tab !== 'stats'; $('reportWrap').hidden = tab !== 'report';
+  $('warningsWrap').hidden = tab !== 'warnings';
+  if (tab === 'report') ensureReport().catch(e => toast(t('err.report') + e.message, 'err'));
 }));
 $('btnToggleResults').addEventListener('click', () => $('resultsPanel').classList.toggle('collapsed'));
 
@@ -1272,23 +1474,37 @@ function renderTables() {
   if (!state.results) return;
   const ti = state.timeIndex, u = state.results.units;
   // nodes
+  const hasLevel = state.results.nodes.some(n => n.level);
+  const hasDeficit = state.results.nodes.some(n => n.demandDeficit);
   let h = `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.type')}</th><th>${t('th.elev')}</th><th>${t('th.pressure')} (${u.pressure})</th><th>${t('th.head')} (${u.head})</th><th>${t('th.demand')} (${u.flow})</th>`;
+  if (hasLevel) h += `<th>${t('m.level')} (${u.head})</th>`;
+  if (hasDeficit) h += `<th>${t('m.deficit')} (${u.flow})</th>`;
   if (u.quality) h += `<th>${t('th.quality')} (${u.quality})</th>`;
   h += `</tr></thead><tbody>`;
   state.results.nodes.forEach(n => {
     const p = n.pressure[ti]; const bad = n.type === 'JUNCTION' && p < 0;
     h += `<tr data-kind="node" data-id="${esc(n.id)}"><td>${esc(n.id)}</td><td>${n.type}</td><td class="num">${fmt(nodeById(n.id) ? nodeById(n.id).elevation : 0)}</td><td class="num ${bad ? 'cell-bad' : ''}">${fmt(p)}</td><td class="num">${fmt(n.head[ti])}</td><td class="num">${fmt(n.demand[ti])}</td>`;
+    if (hasLevel) h += `<td class="num">${fmt(n.level ? n.level[ti] : NaN)}</td>`;
+    if (hasDeficit) h += `<td class="num">${fmt(n.demandDeficit ? n.demandDeficit[ti] : NaN)}</td>`;
     if (u.quality) h += `<td class="num">${fmt(n.quality[ti])}</td>`;
     h += `</tr>`;
   });
   h += `</tbody></table>`;
   $('nodeTableWrap').innerHTML = h;
   // links
-  let hl = `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.type')}</th><th>${t('th.fromTo')}</th><th>${t('th.flow')} (${u.flow})</th><th>${t('th.velocity')} (${u.velocity})</th><th>${t('th.headloss')} (${u.headloss})</th><th>${t('th.status')}</th></tr></thead><tbody>`;
+  const hasSetting = state.results.links.some(l => l.setting);
+  const hasEnergy = state.results.links.some(l => l.energy);
+  let hl = `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.type')}</th><th>${t('th.fromTo')}</th><th>${t('th.flow')} (${u.flow})</th><th>${t('th.velocity')} (${u.velocity})</th><th>${t('th.headloss')} (${u.headloss})</th><th>${t('th.status')}</th>`;
+  if (hasSetting) hl += `<th>${t('m.setting')}</th>`;
+  if (hasEnergy) hl += `<th>${t('m.energy')} (kWh)</th>`;
+  hl += `</tr></thead><tbody>`;
   state.results.links.forEach(l => {
     const st = l.status[ti] > 0.5 ? t('status.open') : t('status.closed');
     const vwarn = Math.abs(l.velocity[ti]) > 2 ? 'cell-warn' : '';
-    hl += `<tr data-kind="link" data-id="${esc(l.id)}"><td>${esc(l.id)}</td><td>${l.type}</td><td>${esc(l.from)}→${esc(l.to)}</td><td class="num">${fmt(l.flow[ti])}</td><td class="num ${vwarn}">${fmt(l.velocity[ti])}</td><td class="num">${fmt(l.headloss[ti])}</td><td>${st}</td></tr>`;
+    hl += `<tr data-kind="link" data-id="${esc(l.id)}"><td>${esc(l.id)}</td><td>${l.type}</td><td>${esc(l.from)}→${esc(l.to)}</td><td class="num">${fmt(l.flow[ti])}</td><td class="num ${vwarn}">${fmt(l.velocity[ti])}</td><td class="num">${fmt(l.headloss[ti])}</td><td>${st}</td>`;
+    if (hasSetting) hl += `<td class="num">${fmt(l.setting ? l.setting[ti] : NaN)}</td>`;
+    if (hasEnergy) hl += `<td class="num">${fmt(l.energy ? l.energy[ti] : NaN)}</td>`;
+    hl += `</tr>`;
   });
   hl += `</tbody></table>`;
   $('linkTableWrap').innerHTML = hl;
@@ -1306,6 +1522,41 @@ function highlightTableRow() {
   document.querySelectorAll('#rpBody tr[data-id]').forEach(tr => {
     tr.classList.toggle('sel', state.sel && tr.dataset.kind === state.sel.kind && tr.dataset.id === state.sel.id);
   });
+}
+function renderStats() {
+  const el = $('statsWrap'); if (!state.results) { el.innerHTML = ''; return; }
+  const s = state.results.statistics;
+  if (!s) { el.innerHTML = `<div class="warn-none">${esc(t('stat.title'))}: –</div>`; return; }
+  const cards = [
+    ['stat.iterations', s.iterations, '', true],
+    ['stat.relError', s.relativeError, ''],
+    ['stat.maxHeadError', s.maxHeadError, state.results.units.head],
+    ['stat.maxFlowChange', s.maxFlowChange, state.results.units.flow],
+    ['stat.massBalance', s.massBalance, ''],
+    ['stat.deficientNodes', s.deficientNodes, '', true],
+    ['stat.demandReduction', s.demandReduction, '%'],
+    ['stat.leakageLoss', s.leakageLoss, '%'],
+  ];
+  el.innerHTML = `<div class="stats-grid">` + cards.map(([k, v, un, isInt]) =>
+    `<div class="stat-card"><div class="sk">${esc(t(k))}</div><div class="sv">${typeof v === 'number' ? (isInt ? String(Math.round(v)) : fmt(v)) : esc(v)}${un ? ' ' + esc(un) : ''}</div></div>`).join('') + `</div>`;
+}
+function renderReport() {
+  const el = $('reportWrap'); if (!state.results) { el.innerHTML = ''; return; }
+  const rpt = state.results.report;
+  el.innerHTML = rpt ? `<pre class="report-text">${esc(rpt)}</pre>` : `<div class="warn-none">${esc(t('report.title'))}: ${esc(t('btn.report'))} →</div>`;
+}
+async function ensureReport() {
+  if (!state.results) return '';
+  if (state.results.report) return state.results.report;
+  const res = await api('/api/report', 'POST', state.net);
+  if (res && res.ok) {
+    state.results.report = res.report || '';
+    if (res.statistics) state.results.statistics = res.statistics;
+    renderReport(); renderStats();
+  } else if (res && res.error) {
+    toast(t('err.report') + res.error, 'err');
+  }
+  return state.results.report || '';
 }
 
 /* ============================ results export & chart ============================ */
@@ -1339,11 +1590,7 @@ function chartSeries() {
   if (!rs) return null;
   let metric = isNode ? state.nodeColor : state.linkColor;
   if (metric === 'status' || !rs[metric]) metric = isNode ? 'pressure' : 'flow';
-  const u = state.results.units;
-  const unit = metric === 'pressure' ? u.pressure : metric === 'head' ? u.head
-    : (metric === 'demand' || metric === 'flow') ? u.flow : metric === 'velocity' ? u.velocity
-    : metric === 'headloss' ? u.headloss : metric === 'quality' ? (u.quality || '') : '';
-  return { id: state.sel.id, metric, values: rs[metric], unit };
+  return { id: state.sel.id, metric, values: rs[metric], unit: metricUnit(metric) };
 }
 function openChart() {
   if (!state.results) { toast(t('chart.noResults'), 'err'); return; }
@@ -1390,6 +1637,13 @@ function drawChart() {
 }
 function redrawChartIfOpen() { if (!$('chartModal').hidden) drawChart(); }
 $('btnExportCsv').addEventListener('click', exportCsv);
+$('btnReport').addEventListener('click', async () => {
+  if (!state.results) { toast(t('chart.noResults'), 'err'); return; }
+  try {
+    const rpt = await ensureReport();
+    if (rpt) { download(rpt, (state.net.title || 'network') + '.rpt', 'text/plain;charset=utf-8'); toast(t('toast.reportDone'), 'ok'); }
+  } catch (e) { toast(t('err.report') + e.message, 'err'); }
+});
 $('btnChart').addEventListener('click', openChart);
 $('btnCloseChart').addEventListener('click', () => { $('chartModal').hidden = true; });
 $('btnCloseChart2').addEventListener('click', () => { $('chartModal').hidden = true; });
@@ -1404,9 +1658,13 @@ function loadNetwork(net) {
   // normalize
   net.nodes = net.nodes || []; net.links = net.links || [];
   net.patterns = net.patterns || []; net.curves = net.curves || []; net.controls = net.controls || [];
+  net.rules = net.rules || [];
   net.options = { ...DEFAULT_OPTIONS, ...(net.options || {}) };
   net.times = { ...DEFAULT_TIMES, ...(net.times || {}) };
   net.quality = { type: 'NONE', chemName: 'Chlorine', chemUnits: 'mg/L', traceNode: '', ...(net.quality || {}) };
+  net.reactions = { ...DEFAULT_REACTIONS, ...(net.reactions || {}) };
+  net.energy = { ...DEFAULT_ENERGY, ...(net.energy || {}) };
+  net.demandModel = { ...DEFAULT_DEMAND_MODEL, ...(net.demandModel || {}) };
   net.geo = { ...defaultGeo(), ...(net.geo || {}) };
   net.nodes.forEach(n => { n.vertices = n.vertices || []; });
   net.links.forEach(l => { l.vertices = l.vertices || []; });

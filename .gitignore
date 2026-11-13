@@ -12,3 +12,7 @@ sim.json
 sim2.json
 export.inp
 reimport.json
+
+# Vendored third-party reference source (EPANET engine, MIT) — kept locally for
+# API/semantics lookup, not part of our build or commits.
+reference/

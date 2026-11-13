@@ -2,15 +2,28 @@ package model
 
 // SimResult is the full simulation output returned to the browser.
 type SimResult struct {
-	OK       bool         `json:"ok"`
-	Error    string       `json:"error,omitempty"`
-	Warnings []string     `json:"warnings,omitempty"`
-	Version  int          `json:"version"`
-	Units    UnitInfo     `json:"units"`
-	Times    []int64      `json:"times"`
-	Nodes    []NodeSeries `json:"nodes"`
-	Links    []LinkSeries `json:"links"`
-	Report   string       `json:"report,omitempty"`
+	OK         bool         `json:"ok"`
+	Error      string       `json:"error,omitempty"`
+	Warnings   []string     `json:"warnings,omitempty"`
+	Version    int          `json:"version"`
+	Units      UnitInfo     `json:"units"`
+	Times      []int64      `json:"times"`
+	Nodes      []NodeSeries `json:"nodes"`
+	Links      []LinkSeries `json:"links"`
+	Statistics *Statistics  `json:"statistics,omitempty"`
+	Report     string       `json:"report,omitempty"`
+}
+
+// Statistics holds engine analysis statistics reported after a solve.
+type Statistics struct {
+	Iterations      int     `json:"iterations"`
+	RelativeError   float64 `json:"relativeError"`
+	MaxHeadError    float64 `json:"maxHeadError"`
+	MaxFlowChange   float64 `json:"maxFlowChange"`
+	MassBalance     float64 `json:"massBalance"`
+	DeficientNodes  int     `json:"deficientNodes"`
+	DemandReduction float64 `json:"demandReduction"`
+	LeakageLoss     float64 `json:"leakageLoss"`
 }
 
 // UnitInfo carries display unit labels derived from the flow-unit system.
@@ -29,29 +42,37 @@ type UnitInfo struct {
 
 // NodeSeries holds per-period computed values for one node.
 type NodeSeries struct {
-	ID       string    `json:"id"`
-	Type     string    `json:"type"`
-	Index    int       `json:"index"`
-	X        float64   `json:"x"`
-	Y        float64   `json:"y"`
-	Pressure []float64 `json:"pressure"`
-	Head     []float64 `json:"head"`
-	Demand   []float64 `json:"demand"`
-	Quality  []float64 `json:"quality"`
+	ID            string    `json:"id"`
+	Type          string    `json:"type"`
+	Index         int       `json:"index"`
+	X             float64   `json:"x"`
+	Y             float64   `json:"y"`
+	Pressure      []float64 `json:"pressure"`
+	Head          []float64 `json:"head"`
+	Demand        []float64 `json:"demand"`
+	Quality       []float64 `json:"quality"`
+	Level         []float64 `json:"level,omitempty"`         // tanks
+	Volume        []float64 `json:"volume,omitempty"`        // tanks
+	DemandDeficit []float64 `json:"demandDeficit,omitempty"` // PDA junctions
 }
 
 // LinkSeries holds per-period computed values for one link.
 type LinkSeries struct {
-	ID       string    `json:"id"`
-	Type     string    `json:"type"`
-	Index    int       `json:"index"`
-	From     string    `json:"from"`
-	To       string    `json:"to"`
-	Flow     []float64 `json:"flow"`
-	Velocity []float64 `json:"velocity"`
-	HeadLoss []float64 `json:"headloss"`
-	Status   []float64 `json:"status"`
-	Quality  []float64 `json:"quality"`
+	ID         string    `json:"id"`
+	Type       string    `json:"type"`
+	Index      int       `json:"index"`
+	From       string    `json:"from"`
+	To         string    `json:"to"`
+	Flow       []float64 `json:"flow"`
+	Velocity   []float64 `json:"velocity"`
+	HeadLoss   []float64 `json:"headloss"`
+	Status     []float64 `json:"status"`
+	Quality    []float64 `json:"quality"`
+	Setting    []float64 `json:"setting,omitempty"`    // valves / pump speed
+	PumpState  []float64 `json:"pumpState,omitempty"`  // pumps
+	Energy     []float64 `json:"energy,omitempty"`     // pumps (kWh)
+	Efficiency []float64 `json:"efficiency,omitempty"` // pumps (%)
+	Power      []float64 `json:"power,omitempty"`      // pumps (kW)
 }
 
 // UnitsFor maps an EPANET flow-unit code to display labels.

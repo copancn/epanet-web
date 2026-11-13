@@ -23,6 +23,15 @@ func ParseINP(text string) *Network {
 	curveOrder := []string{}
 	curveMap := map[string]*Curve{}
 	pendingCurveType := ""
+	demandEntries := map[string][]Demand{}
+	var ruleBlocks []string
+	var curRule []string
+	flushRule := func() {
+		if len(curRule) > 0 {
+			ruleBlocks = append(ruleBlocks, strings.Join(curRule, "\n"))
+			curRule = nil
+		}
+	}
 
 	addNode := func(nd Node) {
 		n.Nodes = append(n.Nodes, nd)
@@ -52,15 +61,17 @@ func ParseINP(text string) *Network {
 				kw := strings.ToUpper(strings.TrimSpace(c[:idx]))
 				id := strings.TrimSpace(c[idx+1:])
 				switch kw {
-				case "PUMP", "EFFICIENCY", "VOLUME", "HEADLOSS", "GENERIC":
+				case "PUMP", "EFFICIENCY", "EFFIC", "VOLUME", "HEADLOSS", "HLOSS", "GENERIC", "VALVE":
 					pendingCurveType = kw
 					_ = id
 				}
 			}
 			continue
 		}
-		// strip inline comment
+		// strip inline comment, keeping it for category names
+		comment := ""
 		if idx := strings.Index(line, ";"); idx >= 0 {
+			comment = strings.TrimSpace(line[idx+1:])
 			line = line[:idx]
 		}
 		f := strings.Fields(line)
@@ -116,7 +127,12 @@ func ParseINP(text string) *Network {
 				nd.MinVol = pf(f[6])
 			}
 			if len(f) > 7 {
-				nd.VolCurve = f[7]
+				if f[7] != "*" {
+					nd.VolCurve = f[7]
+				}
+			}
+			if len(f) > 8 {
+				nd.CanOverflow = strings.EqualFold(f[8], "YES")
 			}
 			addNode(nd)
 
@@ -186,6 +202,9 @@ func ParseINP(text string) *Network {
 			if len(f) > 6 {
 				lk.MinorLoss = pf(f[6])
 			}
+			if len(f) > 7 && lk.Type == "PCV" {
+				lk.HeadCurve = f[7] // PCV loss-coefficient curve
+			}
 			addLink(lk)
 
 		case "STATUS":
@@ -210,11 +229,18 @@ func ParseINP(text string) *Network {
 		case "CURVES":
 			if len(f) >= 3 {
 				id := f[0]
+				ctype := pendingCurveType
+				if len(f) > 3 {
+					ctype = f[3]
+				}
+				ctype = normalizeCurveType(ctype)
 				c, ok := curveMap[id]
 				if !ok {
-					c = &Curve{ID: id, Type: pendingCurveType}
+					c = &Curve{ID: id, Type: ctype}
 					curveMap[id] = c
 					curveOrder = append(curveOrder, id)
+				} else if ctype != "" {
+					c.Type = ctype
 				}
 				c.Points = append(c.Points, Point{X: pf(f[1]), Y: pf(f[2])})
 			}
@@ -222,6 +248,89 @@ func ParseINP(text string) *Network {
 
 		case "CONTROLS":
 			n.Controls = append(n.Controls, strings.TrimSpace(line))
+
+		case "RULES":
+			tl := strings.TrimSpace(line)
+			if strings.HasPrefix(strings.ToUpper(tl), "RULE") {
+				flushRule()
+				curRule = []string{tl}
+			} else {
+				curRule = append(curRule, tl)
+			}
+
+		case "DEMANDS":
+			if len(f) >= 2 {
+				d := Demand{Base: pf(f[1])}
+				if len(f) > 2 {
+					d.Pattern = f[2]
+				}
+				if len(f) > 3 {
+					d.Name = f[3]
+				} else if comment != "" {
+					d.Name = comment
+				}
+				demandEntries[f[0]] = append(demandEntries[f[0]], d)
+			}
+
+		case "EMITTERS":
+			if len(f) >= 2 {
+				if i, ok := nodeByID[f[0]]; ok {
+					n.Nodes[i].Emitter = pf(f[1])
+				}
+			}
+
+		case "LEAKAGE":
+			if len(f) >= 2 {
+				if i, ok := linkByID[f[0]]; ok {
+					n.Links[i].LeakArea = pf(f[1])
+					if len(f) > 2 {
+						n.Links[i].LeakExpan = pf(f[2])
+					}
+				}
+			}
+
+		case "SOURCES":
+			if len(f) >= 3 {
+				if i, ok := nodeByID[f[0]]; ok {
+					n.Nodes[i].SourceType = strings.ToUpper(f[1])
+					n.Nodes[i].SourceQual = pf(f[2])
+					if len(f) > 3 {
+						n.Nodes[i].SourcePat = f[3]
+					}
+				}
+			}
+
+		case "MIXING":
+			if len(f) >= 2 {
+				if i, ok := nodeByID[f[0]]; ok {
+					n.Nodes[i].MixModel = normalizeMixModel(f[1])
+					if len(f) > 2 {
+						n.Nodes[i].MixFraction = pf(f[2])
+					}
+				}
+			}
+
+		case "REACTIONS":
+			parseReactionLine(f, n, linkByID, nodeByID)
+
+		case "ENERGY":
+			parseEnergyLine(f, n, linkByID)
+
+		case "TAGS":
+			if len(f) >= 3 {
+				id := f[1]
+				tag := strings.Join(f[2:], " ")
+				switch strings.ToUpper(f[0]) {
+				case "NODE":
+					if i, ok := nodeByID[id]; ok {
+						n.Nodes[i].Tag = tag
+					}
+				case "LINK":
+					if i, ok := linkByID[id]; ok {
+						n.Links[i].Tag = tag
+					}
+				}
+			}
 
 		case "QUALITY":
 			if len(f) > 1 {
@@ -249,7 +358,7 @@ func ParseINP(text string) *Network {
 			parseTimeLine(f, &n.Times)
 
 		case "OPTIONS":
-			parseOptionLine(f, &n.Options, &n.Quality)
+			parseOptionLine(f, &n.Options, &n.Quality, &n.DemandModel)
 		}
 	}
 
@@ -259,6 +368,21 @@ func ParseINP(text string) *Network {
 	}
 	for _, id := range curveOrder {
 		n.Curves = append(n.Curves, *curveMap[id])
+	}
+	flushRule()
+	n.Rules = ruleBlocks
+	// [DEMANDS] replaces the [JUNCTIONS] demand: first entry is primary,
+	// remaining entries are additional categories.
+	for id, ds := range demandEntries {
+		i, ok := nodeByID[id]
+		if !ok || len(ds) == 0 {
+			continue
+		}
+		n.Nodes[i].Demand = ds[0].Base
+		n.Nodes[i].DemandPat = ds[0].Pattern
+		if len(ds) > 1 {
+			n.Nodes[i].Demands = ds[1:]
+		}
 	}
 	// fill option/time defaults that were absent
 	if n.Options.FlowUnits == "" {
@@ -315,6 +439,8 @@ func parseTimeLine(f []string, t *Times) {
 		t.ReportStep = parseTime(v)
 	} else if v, ok := take("REPORT START"); ok {
 		t.ReportStart = parseTime(v)
+	} else if v, ok := take("RULE TIMESTEP"); ok {
+		t.RuleStep = parseTime(v)
 	} else if v, ok := take("START CLOCKTIME"); ok {
 		t.StartClock = parseTime(v)
 	} else if v, ok := take("STATISTIC"); ok {
@@ -322,7 +448,7 @@ func parseTimeLine(f []string, t *Times) {
 	}
 }
 
-func parseOptionLine(f []string, o *Options, q *Quality) {
+func parseOptionLine(f []string, o *Options, q *Quality, dm *DemandModel) {
 	line := strings.Join(f, " ")
 	upper := strings.ToUpper(line)
 	rest := func(prefix string) (string, bool) {
@@ -333,16 +459,48 @@ func parseOptionLine(f []string, o *Options, q *Quality) {
 	}
 	if v, ok := rest("UNITS"); ok {
 		o.FlowUnits = strings.ToUpper(v)
+	} else if v, ok := rest("PRESSURE EXPONENT"); ok {
+		dm.Pexp = pf(v)
+	} else if v, ok := rest("PRESSURE"); ok {
+		o.PressureUnits = strings.ToUpper(v)
 	} else if v, ok := rest("HEADLOSS"); ok {
 		o.HeadLoss = strings.ToUpper(v)
 	} else if v, ok := rest("DEMAND MULTIPLIER"); ok {
 		o.DemandMult = pf(v)
+	} else if v, ok := rest("DEMAND MODEL"); ok {
+		dm.Type = strings.ToUpper(strings.TrimSpace(v))
+	} else if v, ok := rest("MINIMUM PRESSURE"); ok {
+		dm.Pmin = pf(v)
+	} else if v, ok := rest("REQUIRED PRESSURE"); ok {
+		dm.Preq = pf(v)
 	} else if v, ok := rest("TRIALS"); ok {
 		o.Trials = int(pf(v))
 	} else if v, ok := rest("ACCURACY"); ok {
 		o.Accuracy = pf(v)
 	} else if v, ok := rest("TOLERANCE"); ok {
 		o.Tolerance = pf(v)
+	} else if v, ok := rest("SPECIFIC GRAVITY"); ok {
+		o.SpecificGravity = pf(v)
+	} else if v, ok := rest("VISCOSITY"); ok {
+		o.Viscosity = pf(v)
+	} else if v, ok := rest("DIFFUSIVITY"); ok {
+		o.Diffusivity = pf(v)
+	} else if v, ok := rest("EMITTER EXPONENT"); ok {
+		o.EmitterExponent = pf(v)
+	} else if v, ok := rest("BACKFLOW ALLOWED"); ok {
+		o.EmitterBackflow = strings.EqualFold(strings.TrimSpace(v), "YES")
+	} else if v, ok := rest("PATTERN"); ok {
+		o.DefaultPattern = strings.TrimSpace(v)
+	} else if v, ok := rest("CHECKFREQ"); ok {
+		o.CheckFreq = int(pf(v))
+	} else if v, ok := rest("MAXCHECK"); ok {
+		o.MaxCheck = int(pf(v))
+	} else if v, ok := rest("DAMPLIMIT"); ok {
+		o.DampLimit = pf(v)
+	} else if v, ok := rest("HEADERROR"); ok {
+		o.HeadError = pf(v)
+	} else if v, ok := rest("FLOWCHANGE"); ok {
+		o.FlowChange = pf(v)
 	} else if v, ok := rest("UNBALANCED"); ok {
 		ff := strings.Fields(v)
 		if len(ff) >= 2 {
@@ -370,6 +528,136 @@ func parseOptionLine(f []string, o *Options, q *Quality) {
 			q.ChemName = ff[0]
 			if len(ff) > 1 {
 				q.ChemUnits = ff[1]
+			}
+		}
+	}
+}
+
+// normalizeCurveType maps INP curve-type tokens to the model's canonical names.
+func normalizeCurveType(t string) string {
+	switch strings.ToUpper(strings.TrimSpace(t)) {
+	case "PUMP":
+		return "PUMP"
+	case "EFFIC", "EFFICIENCY":
+		return "EFFICIENCY"
+	case "VOLUME":
+		return "VOLUME"
+	case "HEADLOSS", "HLOSS":
+		return "HEADLOSS"
+	case "VALVE":
+		return "VALVE"
+	case "GENERIC":
+		return "GENERIC"
+	default:
+		return ""
+	}
+}
+
+// normalizeMixModel maps INP mixing tokens to canonical model names.
+func normalizeMixModel(m string) string {
+	switch strings.ToUpper(strings.TrimSpace(m)) {
+	case "MIXED", "MIX1":
+		return "MIX1"
+	case "2COMP", "MIX2":
+		return "MIX2"
+	case "FIFO":
+		return "FIFO"
+	case "LIFO":
+		return "LIFO"
+	default:
+		return strings.ToUpper(strings.TrimSpace(m))
+	}
+}
+
+// parseReactionLine handles one [REACTIONS] line.
+func parseReactionLine(f []string, n *Network, linkByID, nodeByID map[string]int) {
+	if len(f) == 0 {
+		return
+	}
+	kw := strings.ToUpper(f[0])
+	switch kw {
+	case "ORDER":
+		if len(f) >= 3 {
+			v := int(pf(f[2]))
+			switch strings.ToUpper(f[1]) {
+			case "BULK":
+				n.Reactions.BulkOrder = v
+			case "WALL":
+				n.Reactions.WallOrder = v
+			case "TANK":
+				n.Reactions.TankOrder = v
+			}
+		}
+	case "GLOBAL":
+		if len(f) >= 3 {
+			switch strings.ToUpper(f[1]) {
+			case "BULK":
+				n.Reactions.GlobalBulk = pf(f[2])
+			case "WALL":
+				n.Reactions.GlobalWall = pf(f[2])
+			}
+		}
+	case "LIMITING":
+		if len(f) >= 3 {
+			n.Reactions.LimitingPot = pf(f[2])
+		}
+	case "ROUGHNESS":
+		if len(f) >= 3 {
+			n.Reactions.RoughCorrel = pf(f[2])
+		}
+	case "BULK", "WALL":
+		if len(f) >= 3 {
+			if i, ok := linkByID[f[1]]; ok {
+				if kw == "BULK" {
+					n.Links[i].KBulk = pf(f[2])
+				} else {
+					n.Links[i].KWall = pf(f[2])
+				}
+			}
+		}
+	case "TANK":
+		if len(f) >= 3 {
+			if i, ok := nodeByID[f[1]]; ok {
+				n.Nodes[i].TankKBulk = pf(f[2])
+			}
+		}
+	}
+}
+
+// parseEnergyLine handles one [ENERGY] line.
+func parseEnergyLine(f []string, n *Network, linkByID map[string]int) {
+	if len(f) == 0 {
+		return
+	}
+	switch strings.ToUpper(f[0]) {
+	case "GLOBAL":
+		if len(f) >= 3 {
+			switch strings.ToUpper(f[1]) {
+			case "EFFIC", "EFFICIENCY":
+				n.Energy.GlobalEfficiency = pf(f[2])
+			case "PRICE":
+				n.Energy.GlobalPrice = pf(f[2])
+			case "PATTERN":
+				n.Energy.PricePattern = f[2]
+			}
+		}
+	case "DEMAND":
+		if len(f) >= 3 {
+			n.Energy.DemandCharge = pf(f[2])
+		}
+	case "PUMP":
+		if len(f) >= 4 {
+			i, ok := linkByID[f[1]]
+			if !ok {
+				return
+			}
+			switch strings.ToUpper(f[2]) {
+			case "EFFIC", "EFFICIENCY":
+				n.Links[i].EffCurve = f[3]
+			case "PRICE":
+				n.Links[i].Price = pf(f[3])
+			case "PATTERN":
+				n.Links[i].PricePat = f[3]
 			}
 		}
 	}
