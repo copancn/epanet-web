@@ -909,8 +909,12 @@ function renderElemList() {
 }
 function centerOn(it) {
   let wx, wy;
-  if (it.type && nodeById(it.id)) { wx = it.x; wy = it.y; }
+  // Links carry from/to, nodes carry x/y. Identify by structure, not by id
+  // lookup: a link id can equal a node id (e.g. Net3), which would otherwise
+  // read undefined x/y off the link and pan to NaN (blank canvas).
+  if (it.from === undefined) { wx = it.x; wy = it.y; }
   else { const a = nodeById(it.from), b = nodeById(it.to); if (!a || !b) return; wx = (a.x + b.x) / 2; wy = (a.y + b.y) / 2; }
+  if (!isFinite(wx) || !isFinite(wy)) return;
   state.view.panX = canvas.clientWidth / 2 - wx * state.view.scale;
   state.view.panY = canvas.clientHeight / 2 + wy * state.view.scale;
   render();
