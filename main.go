@@ -103,17 +103,20 @@ func defaultWorkers() int {
 	return n
 }
 
-// resolveDLL finds epanet2.dll: explicit flag, next to the executable, in the
-// working directory, then the known SDK location.
+// resolveDLL finds epanet2.dll: explicit flag, EPANET_DLL env var, next to the
+// executable, then in the working directory.
 func resolveDLL(flagVal string) string {
 	var candidates []string
 	if flagVal != "" {
 		candidates = append(candidates, flagVal)
 	}
+	if env := os.Getenv("EPANET_DLL"); env != "" {
+		candidates = append(candidates, env)
+	}
 	if exe, err := os.Executable(); err == nil {
 		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "epanet2.dll"))
 	}
-	candidates = append(candidates, "epanet2.dll", `G:\epanet\64bit\epanet2.dll`)
+	candidates = append(candidates, "epanet2.dll")
 	for _, c := range candidates {
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(abs); err == nil {
@@ -124,18 +127,21 @@ func resolveDLL(flagVal string) string {
 	return "epanet2.dll"
 }
 
-// resolveMSXDLL finds epanetmsx.dll: explicit flag, next to the executable, in
-// the working directory, then the known build location. Returns "" when absent
-// so multi-species chemistry is gracefully disabled (EPANET still works).
+// resolveMSXDLL finds epanetmsx.dll: explicit flag, EPANET_MSX_DLL env var, next
+// to the executable, then in the working directory. Returns "" when absent so
+// multi-species chemistry is gracefully disabled (EPANET still works).
 func resolveMSXDLL(flagVal string) string {
 	var candidates []string
 	if flagVal != "" {
 		candidates = append(candidates, flagVal)
 	}
+	if env := os.Getenv("EPANET_MSX_DLL"); env != "" {
+		candidates = append(candidates, env)
+	}
 	if exe, err := os.Executable(); err == nil {
 		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "epanetmsx.dll"))
 	}
-	candidates = append(candidates, "epanetmsx.dll", `E:\msx-main\build-mingw\epanetmsx.dll`)
+	candidates = append(candidates, "epanetmsx.dll")
 	for _, c := range candidates {
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(abs); err == nil {

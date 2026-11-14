@@ -13,11 +13,14 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"epanet-web/epanet"
 	"epanet-web/model"
 	"epanet-web/msx"
 )
+
+const defaultJobTimeout = 60 * time.Second
 
 // RunFunc executes one simulation. It is injected so that pool does not depend
 // on the server package (which would create an import cycle).
@@ -82,6 +85,7 @@ type Pool struct {
 	dllPath string
 	msxPath string
 	size    int
+	timeout time.Duration
 
 	idle chan *worker
 	done chan struct{}
@@ -107,6 +111,7 @@ func New(size int, dllPath, msxPath string) (*Pool, error) {
 		dllPath: dllPath,
 		msxPath: msxPath,
 		size:    size,
+		timeout: defaultJobTimeout,
 		idle:    make(chan *worker, size),
 		done:    make(chan struct{}),
 	}
@@ -181,19 +186,50 @@ func (p *Pool) Submit(net *model.Network) *model.SimResult {
 	return res
 }
 
-// exchange sends the request and reads the response. Returns nil on IO error,
-// having killed the worker.
+// exchange sends the request and reads the response, bounded by p.timeout and
+// pool shutdown. Returns nil on IO error or timeout, having killed the worker.
 func (p *Pool) exchange(w *worker, net *model.Network) *model.SimResult {
-	if err := w.enc.Encode(net); err != nil {
+	type outcome struct {
+		res *model.SimResult
+		ok  bool
+	}
+	ch := make(chan outcome, 1)
+	go func() {
+		if err := w.enc.Encode(net); err != nil {
+			ch <- outcome{}
+			return
+		}
+		var res model.SimResult
+		if err := w.dec.Decode(&res); err != nil {
+			ch <- outcome{}
+			return
+		}
+		ch <- outcome{res: &res, ok: true}
+	}()
+
+	timeout := p.timeout
+	if timeout <= 0 {
+		timeout = defaultJobTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case out := <-ch:
+		if !out.ok {
+			w.kill()
+			return nil
+		}
+		return out.res
+	case <-timer.C:
 		w.kill()
+		<-ch
+		return nil
+	case <-p.done:
+		w.kill()
+		<-ch
 		return nil
 	}
-	var res model.SimResult
-	if err := w.dec.Decode(&res); err != nil {
-		w.kill()
-		return nil
-	}
-	return &res
 }
 
 // respawn replaces a dead worker, keeping the pool at its configured size.

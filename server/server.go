@@ -24,7 +24,7 @@ func New(static fs.FS, p *pool.Pool) http.Handler {
 	mux.HandleFunc("/api/health", handleHealth(p))
 	mux.HandleFunc("/api/example", handleExample)
 	mux.HandleFunc("/api/simulate", handleSimulate(p))
-	mux.HandleFunc("/api/report", handleReport)
+	mux.HandleFunc("/api/report", handleReport(p))
 	mux.HandleFunc("/api/import", handleImport)
 	mux.HandleFunc("/api/export", handleExport)
 	mux.Handle("/", http.FileServer(http.FS(static)))
@@ -100,22 +100,29 @@ func handleSimulate(p *pool.Pool) http.HandlerFunc {
 	}
 }
 
-func handleReport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, model.ErrPostRequired, http.StatusMethodNotAllowed)
-		return
+func handleReport(p *pool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, model.ErrPostRequired, http.StatusMethodNotAllowed)
+			return
+		}
+		defer recoverTo(w)
+		var net model.Network
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&net); err != nil {
+			writeJSON(w, &model.SimResult{Error: model.ErrMsg(model.ErrBadJSON, err)})
+			return
+		}
+		if len(net.Nodes) == 0 {
+			writeJSON(w, &model.SimResult{Error: model.NewMsg(model.ErrEmptyNet)})
+			return
+		}
+		net.WithReport = true
+		if p == nil {
+			writeJSON(w, RunSimulationReport(&net))
+			return
+		}
+		writeJSON(w, p.Submit(&net))
 	}
-	defer recoverTo(w)
-	var net model.Network
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&net); err != nil {
-		writeJSON(w, &model.SimResult{Error: model.ErrMsg(model.ErrBadJSON, err)})
-		return
-	}
-	if len(net.Nodes) == 0 {
-		writeJSON(w, &model.SimResult{Error: model.NewMsg(model.ErrEmptyNet)})
-		return
-	}
-	writeJSON(w, RunSimulationReport(&net))
 }
 
 func handleImport(w http.ResponseWriter, r *http.Request) {

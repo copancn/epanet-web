@@ -638,7 +638,7 @@ function tipContent(hit) {
         rows.push([t('m.head'), fmt(rs.head[ti]), u.head]);
         rows.push([t('m.demand'), fmt(rs.demand[ti]), u.flow]);
         if (rs.level) rows.push([t('m.level'), fmt(rs.level[ti]), u.head]);
-        if (rs.volume) rows.push([t('m.volume'), fmt(rs.volume[ti]), 'm³']);
+        if (rs.volume) rows.push([t('m.volume'), fmt(rs.volume[ti]), u.metric === false ? 'ft³' : 'm³']);
         if (rs.demandDeficit && rs.demandDeficit[ti] > 0) rows.push([t('m.deficit'), fmt(rs.demandDeficit[ti]), u.flow]);
         if (rs.emitterFlow && rs.emitterFlow[ti] !== 0) rows.push([t('m.emitterFlow'), fmt(rs.emitterFlow[ti]), u.flow]);
         if (rs.leakageFlow && rs.leakageFlow[ti] !== 0) rows.push([t('m.leakageFlow'), fmt(rs.leakageFlow[ti]), u.flow]);
@@ -660,11 +660,13 @@ function tipContent(hit) {
       }
     }
   } else if (hit.kind === 'node') {
-    rows.push([t('prop.elev'), fmt(obj.elevation), 'm']);
+    const eu = editUnits();
+    rows.push([t('th.elev'), fmt(obj.elevation), eu.elev]);
     if (obj.type === 'JUNCTION') rows.push([t('prop.baseDemand'), fmt(obj.demand), '']);
   } else {
+    const eu = editUnits();
     rows.push([t('th.fromTo'), esc(obj.from) + '→' + esc(obj.to), '']);
-    rows.push([t('prop.length'), fmt(obj.length), 'm']);
+    rows.push([propUnitLabel('prop.length', ''), fmt(obj.length), eu.len]);
   }
   if (!rows.length) return head;
   return head + rows.map(([k, v, un]) => `<div class="tip-row"><span>${esc(k)}</span><span>${v}${un ? ' ' + esc(un) : ''}</span></div>`).join('');
@@ -705,7 +707,7 @@ function addNode(tool, wx, wy) {
 }
 
 function addLink(type, from, to) {
-  if (state.net.links.some(l => (l.from === from && l.to === to) || (l.from === to && l.to === from))) { toast(t('err.linkExists'), 'err'); return; }
+  if (type === 'PIPE' && state.net.links.some(l => l.type === 'PIPE' && ((l.from === from && l.to === to) || (l.from === to && l.to === from)))) { toast(t('err.linkExists'), 'err'); return; }
   const prefix = type === 'PIPE' ? 'P' : type === 'PUMP' ? 'PUMP' : 'V';
   const l = { id: genId(prefix, state.net.links), type, from, to, length: 300, diameter: 200, roughness: 100, minorLoss: 0, status: 'OPEN', power: 0, headCurve: '', speed: 1, speedPattern: '', setting: 20, vertices: [] };
   if (type === 'PUMP') { l.power = 0; l.headCurve = state.net.curves[0] ? state.net.curves[0].id : ''; }
@@ -921,6 +923,18 @@ function centerOn(it) {
 }
 
 /* ============================ property form ============================ */
+function isUSUnits() {
+  const fu = state.net && state.net.options ? state.net.options.flowUnits : 'LPS';
+  return ['CFS', 'GPM', 'MGD', 'IMGD', 'AFD'].includes((fu || '').toUpperCase());
+}
+function editUnits() {
+  const us = isUSUnits();
+  return { elev: us ? 'ft' : 'm', head: us ? 'ft' : 'm', len: us ? 'ft' : 'm', pipeDiam: us ? 'in' : 'mm', tankDiam: us ? 'ft' : 'm', vol: us ? 'ft³' : 'm³' };
+}
+function propUnitLabel(key, unit) {
+  const base = t(key).replace(/\s*\([^)]*\)\s*$/, '');
+  return unit ? `${base} (${unit})` : base;
+}
 function field(label, input) {
   const d = document.createElement('div'); d.className = 'field';
   const l = document.createElement('label'); l.textContent = label; d.appendChild(l); d.appendChild(input); return d;
@@ -1007,25 +1021,26 @@ function buildPropsForm() {
   // ID
   form.appendChild(field(t('prop.id'), textInput(obj.id, v => renameId(v))));
 
+  const eu = editUnits();
   if (isNode) {
     const row = document.createElement('div'); row.className = 'field-row';
     row.appendChild(field('X', numInput(obj.x, v => { obj.x = v; markDirty(false); render(); })));
     row.appendChild(field('Y', numInput(obj.y, v => { obj.y = v; markDirty(false); render(); })));
     form.appendChild(row);
     if (obj.type === 'JUNCTION') {
-      form.appendChild(field(t('prop.elev'), numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
+      form.appendChild(field(propUnitLabel('prop.elev', eu.elev), numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
       form.appendChild(field(t('prop.baseDemand'), numInput(obj.demand, v => { obj.demand = v; markDirty(false); })));
       form.appendChild(field(t('prop.demandPat'), selectInput(obj.demandPattern, patternOptions(), v => { obj.demandPattern = v; markDirty(false); })));
       form.appendChild(field(t('prop.emitter'), numInput(obj.emitter, v => { obj.emitter = v; markDirty(false); })));
       form.appendChild(demandsEditor(obj));
     } else if (obj.type === 'RESERVOIR') {
-      form.appendChild(field(t('prop.head'), numInput(obj.head, v => { obj.head = v; markDirty(false); })));
+      form.appendChild(field(propUnitLabel('prop.head', eu.head), numInput(obj.head, v => { obj.head = v; markDirty(false); })));
       form.appendChild(field(t('prop.headPat'), selectInput(obj.headPattern, patternOptions(), v => { obj.headPattern = v; markDirty(false); })));
     } else if (obj.type === 'TANK') {
-      form.appendChild(field(t('prop.tankElev'), numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
+      form.appendChild(field(propUnitLabel('prop.tankElev', eu.elev), numInput(obj.elevation, v => { obj.elevation = v; markDirty(false); })));
       const r1 = document.createElement('div'); r1.className = 'field-row';
       r1.appendChild(field(t('prop.initLevel'), numInput(obj.initLevel, v => { obj.initLevel = v; markDirty(false); })));
-      r1.appendChild(field(t('prop.diamM'), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
+      r1.appendChild(field(propUnitLabel('prop.diamM', eu.tankDiam), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
       form.appendChild(r1);
       const r2 = document.createElement('div'); r2.className = 'field-row';
       r2.appendChild(field(t('prop.minLevel'), numInput(obj.minLevel, v => { obj.minLevel = v; markDirty(false); })));
@@ -1050,8 +1065,8 @@ function buildPropsForm() {
     row.appendChild(field(t('prop.to'), selectInput(obj.to, nodeOptions(), v => { obj.to = v; markDirty(true); render(); })));
     form.appendChild(row);
     if (obj.type === 'PIPE') {
-      form.appendChild(field(t('prop.length'), numInput(obj.length, v => { obj.length = v; markDirty(false); })));
-      form.appendChild(field(t('prop.diamMm'), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
+      form.appendChild(field(propUnitLabel('prop.length', eu.len), numInput(obj.length, v => { obj.length = v; markDirty(false); })));
+      form.appendChild(field(propUnitLabel('prop.diamMm', eu.pipeDiam), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
       form.appendChild(field(t('prop.rough'), numInput(obj.roughness, v => { obj.roughness = v; markDirty(false); })));
       form.appendChild(field(t('prop.minorLoss'), numInput(obj.minorLoss, v => { obj.minorLoss = v; markDirty(false); })));
       form.appendChild(field(t('prop.initStatus'), selectInput(obj.status, [['OPEN', t('status.open')], ['CLOSED', t('status.closed')], ['CV', t('status.cv')]], v => { obj.status = v; markDirty(false); render(); })));
@@ -1083,7 +1098,7 @@ function buildPropsForm() {
       form.appendChild(rp);
     } else {
       form.appendChild(field(t('prop.valveType'), selectInput(obj.type, VALVE_TYPES.map(v => [v, t('valve.' + v.toLowerCase())]), v => { obj.type = v; markDirty(false); buildPropsForm(); render(); })));
-      form.appendChild(field(t('prop.diamMm'), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
+      form.appendChild(field(propUnitLabel('prop.diamMm', eu.pipeDiam), numInput(obj.diameter, v => { obj.diameter = v; markDirty(false); })));
       if (obj.type === 'GPV') form.appendChild(field(t('prop.hlossCurve'), selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
       else {
         form.appendChild(field(t('prop.setting'), numInput(obj.setting, v => { obj.setting = v; markDirty(false); })));
@@ -1112,7 +1127,7 @@ function resultReadout(rs, isNode) {
     : [[t('m.flow'), rs.flow[ti], u.flow], [t('m.velocity'), rs.velocity[ti], u.velocity], [t('m.headloss'), rs.headloss[ti], u.headloss], [t('m.status'), rs.status[ti] > 0.5 ? t('status.open') : t('status.closed'), '']];
   if (isNode) {
     if (rs.level) rows.push([t('m.level'), rs.level[ti], u.head]);
-    if (rs.volume) rows.push([t('m.volume'), rs.volume[ti], 'm³']);
+    if (rs.volume) rows.push([t('m.volume'), rs.volume[ti], u.metric === false ? 'ft³' : 'm³']);
     if (rs.demandDeficit) rows.push([t('m.deficit'), rs.demandDeficit[ti], u.flow]);
     if (rs.emitterFlow && rs.emitterFlow[ti] !== 0) rows.push([t('m.emitterFlow'), rs.emitterFlow[ti], u.flow]);
     if (rs.leakageFlow && rs.leakageFlow[ti] !== 0) rows.push([t('m.leakageFlow'), rs.leakageFlow[ti], u.flow]);
@@ -1154,7 +1169,7 @@ function settingsCtx() {
 const SETTINGS_CATEGORIES = [
   { key: 'analysis', label: 'set.analysis', build(p) {
     const { o } = settingsCtx();
-    p.appendChild(field(t('set.flowUnits'), selectInput(o.flowUnits, [['LPS', t('unit.lps')], ['LPM', t('unit.lpm')], ['CMH', t('unit.cmh')], ['CMD', t('unit.cmd')], ['CMS', t('unit.cms')], ['MLD', t('unit.mld')], ['GPM', t('unit.gpm')], ['CFS', t('unit.cfs')], ['MGD', t('unit.mgd')]], v => { o.flowUnits = v; markDirty(false); })));
+    p.appendChild(field(t('set.flowUnits'), selectInput(o.flowUnits, [['LPS', t('unit.lps')], ['LPM', t('unit.lpm')], ['CMH', t('unit.cmh')], ['CMD', t('unit.cmd')], ['CMS', t('unit.cms')], ['MLD', t('unit.mld')], ['GPM', t('unit.gpm')], ['CFS', t('unit.cfs')], ['MGD', t('unit.mgd')]], v => { o.flowUnits = v; markDirty(false); buildPropsForm(); })));
     p.appendChild(field(t('set.headLoss'), selectInput(o.headLoss, [['H-W', 'Hazen-Williams'], ['D-W', 'Darcy-Weisbach'], ['C-M', 'Chezy-Manning']], v => { o.headLoss = v; markDirty(false); })));
     p.appendChild(field(t('set.demandMult'), numInput(o.demandMult, v => { o.demandMult = v; markDirty(false); }, '0.1')));
     const r = document.createElement('div'); r.className = 'field-row';
@@ -1840,7 +1855,7 @@ function metricUnit(k) {
     case 'energy': return 'kWh';
     case 'efficiency': return '%';
     case 'power': return 'kW';
-    case 'volume': return 'm³';
+    case 'volume': return u.metric === false ? 'ft³' : 'm³';
     default: return '';
   }
 }
@@ -2340,9 +2355,11 @@ function reviewNetwork() {
   });
   const pair = {};
   net.links.forEach(l => {
-    const k = [l.from, l.to].sort().join('|');
-    pair[k] = (pair[k] || 0) + 1;
-    if (pair[k] > 1) add('warn', 'review.parallel', [l.id], { kind: 'link', id: l.id }, () => rvDeleteLink(l.id));
+    if (l.type === 'PIPE') {
+      const k = [l.from, l.to].sort().join('|');
+      pair[k] = (pair[k] || 0) + 1;
+      if (pair[k] > 1) add('warn', 'review.parallel', [l.id], { kind: 'link', id: l.id }, () => rvDeleteLink(l.id));
+    }
     if (l.type !== 'PUMP' && l.diameter <= 0) add('error', 'review.badDiam', [l.id], { kind: 'link', id: l.id }, () => { l.diameter = 200; });
     if (l.type === 'PIPE' && l.length <= 0) add('error', 'review.badLength', [l.id], { kind: 'link', id: l.id }, () => { l.length = 300; });
   });

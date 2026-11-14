@@ -7,13 +7,19 @@ import (
 
 	"epanet-web/epanet"
 	"epanet-web/model"
+	"epanet-web/msx"
 )
 
 func TestMain(m *testing.M) {
-	// DLL lives at the project root, one level above this package dir.
+	// DLLs live at the project root, one level above this package dir.
 	path, _ := filepath.Abs("../epanet2.dll")
 	if err := epanet.Init(path); err != nil {
 		panic(err)
+	}
+	if msxPath, err := filepath.Abs("../epanetmsx.dll"); err == nil {
+		if _, err := os.Stat(msxPath); err == nil {
+			_ = msx.Init(msxPath)
+		}
 	}
 	os.Exit(m.Run())
 }
@@ -165,6 +171,34 @@ func TestAdvancedFeatures(t *testing.T) {
 	}
 	t.Logf("stats=%+v reportLen=%d tankLevel0=%.2f pumpEnergyLast=%.3f warnings=%v",
 		res.Statistics, len(res.Report), tank.Level[0], pump.Energy[len(res.Times)-1], res.Warnings)
+}
+
+func TestMSXChlorineSimulation(t *testing.T) {
+	if !msx.Ready() {
+		t.Skip("epanetmsx.dll not loaded")
+	}
+	net := model.Example()
+	cfg := model.MSXChlorinePreset()
+	cfg.Sources = []model.MSXSource{
+		{Type: "CONC", Node: "R1", Species: "CL2", Strength: 1.2},
+	}
+	cfg.Quality = []model.MSXQuality{
+		{Scope: "GLOBAL", Species: "CL2", Value: 0.5},
+	}
+	net.MSX = cfg
+	res := RunSimulation(net)
+	if !res.OK {
+		t.Fatalf("simulation with MSX failed: %s", res.Error)
+	}
+	if res.MSX == nil {
+		t.Fatalf("expected MSX results, got nil (warnings=%v)", res.Warnings)
+	}
+	if len(res.MSX.Species) != 1 || res.MSX.Species[0].ID != "CL2" {
+		t.Fatalf("unexpected MSX species: %+v", res.MSX.Species)
+	}
+	if len(res.MSX.Nodes) != len(net.Nodes) || len(res.MSX.Times) < 2 {
+		t.Fatalf("unexpected MSX series dimensions: nodes=%d times=%d", len(res.MSX.Nodes), len(res.MSX.Times))
+	}
 }
 
 func advancedNet() *model.Network {

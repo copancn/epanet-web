@@ -13,7 +13,7 @@ import (
 // the given network and returns a per-period time series. The entire EPANET
 // session is serialized under the global lock.
 func RunSimulation(net *model.Network) *model.SimResult {
-	return runSim(net, false)
+	return runSim(net, net.WithReport)
 }
 
 // RunSimulationReport is like RunSimulation but also generates the EPANET

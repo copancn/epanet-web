@@ -11,6 +11,7 @@ package epanet
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -176,6 +177,8 @@ var procNames = []string{
 // Init loads the EPANET shared library from dllPath. It is safe to call once
 // at startup. Subsequent calls are ignored.
 func Init(dllPath string) error {
+	mu.Lock()
+	defer mu.Unlock()
 	if inited {
 		return initErr
 	}
@@ -202,11 +205,11 @@ func Ready() bool { return inited && initErr == nil }
 
 func p(name string) *syscall.LazyProc { return procs[name] }
 
-// cstr returns a pointer to a NUL-terminated copy of s suitable for passing
-// directly inside a Call expression.
-func cstr(s string) uintptr {
+// cstr returns a pointer to a NUL-terminated copy of s. Callers must keep the
+// returned *byte alive across the syscall via runtime.KeepAlive.
+func cstr(s string) *byte {
 	b := append([]byte(s), 0)
-	return uintptr(unsafe.Pointer(&b[0]))
+	return &b[0]
 }
 
 func goStr(b []byte) string {
@@ -252,10 +255,22 @@ func solveCall(name string, args ...uintptr) (warning string, err error) {
 
 // ---- project functions ----
 
-func Open(inp, rpt, out string) error { return call("ENopen", cstr(inp), cstr(rpt), cstr(out)) }
-func Close() error                    { return call("ENclose") }
-func SaveInp(path string) error       { return call("ENsaveinpfile", cstr(path)) }
-func Report() error                   { return call("ENreport") }
+func Open(inp, rpt, out string) error {
+	pi, pr, po := cstr(inp), cstr(rpt), cstr(out)
+	err := call("ENopen", uintptr(unsafe.Pointer(pi)), uintptr(unsafe.Pointer(pr)), uintptr(unsafe.Pointer(po)))
+	runtime.KeepAlive(pi)
+	runtime.KeepAlive(pr)
+	runtime.KeepAlive(po)
+	return err
+}
+func Close() error { return call("ENclose") }
+func SaveInp(path string) error {
+	ps := cstr(path)
+	err := call("ENsaveinpfile", uintptr(unsafe.Pointer(ps)))
+	runtime.KeepAlive(ps)
+	return err
+}
+func Report() error { return call("ENreport") }
 
 func Version() (int, error) {
 	var v int32
@@ -277,7 +292,12 @@ func SolveH() (string, error) { return solveCall("ENsolveH") }
 func SaveH() error            { return call("ENsaveH") }
 
 // SaveHydFile writes the computed hydraulics to a binary .hyd file (for MSX).
-func SaveHydFile(path string) error { return call("ENsavehydfile", cstr(path)) }
+func SaveHydFile(path string) error {
+	ps := cstr(path)
+	err := call("ENsavehydfile", uintptr(unsafe.Pointer(ps)))
+	runtime.KeepAlive(ps)
+	return err
+}
 func OpenH() error            { return call("ENopenH") }
 func InitH(flag int) error    { return call("ENinitH", uintptr(flag)) }
 func CloseH() error           { return call("ENcloseH") }

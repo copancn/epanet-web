@@ -503,9 +503,14 @@ func parseOptionLine(f []string, o *Options, q *Quality, dm *DemandModel) {
 		o.FlowChange = pf(v)
 	} else if v, ok := rest("UNBALANCED"); ok {
 		ff := strings.Fields(v)
-		if len(ff) >= 2 {
+		if len(ff) >= 1 && strings.EqualFold(ff[0], "STOP") {
+			o.UnbalancedStop = true
+			o.Unbalanced = 0
+		} else if len(ff) >= 2 {
+			o.UnbalancedStop = false
 			o.Unbalanced = int(pf(ff[1]))
 		} else if len(ff) == 1 {
+			o.UnbalancedStop = false
 			o.Unbalanced = int(pf(ff[0]))
 		}
 	} else if v, ok := rest("QUALITY"); ok {

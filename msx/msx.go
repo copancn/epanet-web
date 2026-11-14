@@ -13,6 +13,7 @@ package msx
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -87,9 +88,9 @@ func Ready() bool { return inited && initErr == nil }
 
 func p(name string) *syscall.LazyProc { return procs[name] }
 
-func cstr(s string) uintptr {
+func cstr(s string) *byte {
 	b := append([]byte(s), 0)
-	return uintptr(unsafe.Pointer(&b[0]))
+	return &b[0]
 }
 
 func goStr(b []byte) string {
@@ -121,11 +122,21 @@ func call(name string, args ...uintptr) error {
 // ---- project functions ----
 
 // Open reads a .msx file and mirrors the currently open EPANET network.
-func Open(msxFile string) error { return call("MSXopen", cstr(msxFile)) }
-func Close() error              { return call("MSXclose") }
+func Open(msxFile string) error {
+	ps := cstr(msxFile)
+	err := call("MSXopen", uintptr(unsafe.Pointer(ps)))
+	runtime.KeepAlive(ps)
+	return err
+}
+func Close() error { return call("MSXclose") }
 
 // UseHydFile registers an EPANET binary hydraulics file with MSX.
-func UseHydFile(hydFile string) error { return call("MSXusehydfile", cstr(hydFile)) }
+func UseHydFile(hydFile string) error {
+	ps := cstr(hydFile)
+	err := call("MSXusehydfile", uintptr(unsafe.Pointer(ps)))
+	runtime.KeepAlive(ps)
+	return err
+}
 
 // SolveH runs EPANET hydraulics internally and registers the result.
 func SolveH() error { return call("MSXsolveH") }
@@ -157,8 +168,10 @@ func SpeciesCount() (int, error) {
 
 // SpeciesIndex returns the base-1 index of a named species.
 func SpeciesIndex(id string) (int, error) {
+	ps := cstr(id)
 	var n int32
-	e := call("MSXgetindex", uintptr(Species), cstr(id), uintptr(unsafe.Pointer(&n)))
+	e := call("MSXgetindex", uintptr(Species), uintptr(unsafe.Pointer(ps)), uintptr(unsafe.Pointer(&n)))
+	runtime.KeepAlive(ps)
 	return int(n), e
 }
 

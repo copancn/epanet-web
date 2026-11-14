@@ -122,4 +122,11 @@ func TestAdvancedRoundTrip(t *testing.T) {
 	if v1 == nil || v1.Type != "PCV" || v1.Setting != 50 || v1.HeadCurve != "VC1" || v1.MinorLoss != 0.1 {
 		t.Errorf("PCV setting/curve lost: %+v", v1)
 	}
+
+	// Verify UNBALANCED STOP round-trip.
+	n.Options.UnbalancedStop = true
+	gotStop := ParseINP(n.ToINP())
+	if !gotStop.Options.UnbalancedStop {
+		t.Errorf("UNBALANCED STOP lost: %+v", gotStop.Options)
+	}
 }

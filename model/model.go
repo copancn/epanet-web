@@ -24,6 +24,7 @@ type Network struct {
 	Energy      Energy      `json:"energy"`
 	DemandModel DemandModel `json:"demandModel"`
 	MSX         *MSXConfig  `json:"msx,omitempty"`
+	WithReport  bool        `json:"withReport,omitempty"`
 }
 
 // Node is a junction, reservoir or tank.
@@ -143,6 +144,7 @@ type Options struct {
 	Accuracy        float64 `json:"accuracy"`
 	Tolerance       float64 `json:"tolerance"`
 	Unbalanced      int     `json:"unbalanced"`
+	UnbalancedStop  bool    `json:"unbalancedStop,omitempty"`
 	PressureUnits   string  `json:"pressureUnits,omitempty"` // PSI | KPA | METERS | BAR | FEET
 	SpecificGravity float64 `json:"specificGravity,omitempty"`
 	Viscosity       float64 `json:"viscosity,omitempty"`
@@ -644,7 +646,11 @@ func (n *Network) ToINP() string {
 	w(" TRIALS\t%d\n", orInt(o.Trials, 40))
 	w(" ACCURACY\t%s\n", num(orFloat(o.Accuracy, 0.001)))
 	w(" TOLERANCE\t%s\n", num(orFloat(o.Tolerance, 0.01)))
-	w(" UNBALANCED\tCONTINUE %d\n", orInt(o.Unbalanced, 10))
+	if o.UnbalancedStop {
+		w(" UNBALANCED\tSTOP\n")
+	} else {
+		w(" UNBALANCED\tCONTINUE %d\n", orInt(o.Unbalanced, 10))
+	}
 	if o.SpecificGravity != 0 {
 		w(" SPECIFIC GRAVITY\t%s\n", num(o.SpecificGravity))
 	}
