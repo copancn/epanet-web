@@ -25,7 +25,7 @@ func TestServeProtocol(t *testing.T) {
 		}
 	}
 	done := make(chan struct{})
-	go func() { serve(inR, outW, "", fake); close(done) }()
+	go func() { serve(inR, outW, "", "", fake); close(done) }()
 
 	net := &model.Network{Title: "t", Nodes: []model.Node{{ID: "J1", Type: "JUNCTION"}}}
 	enc := json.NewEncoder(inW)

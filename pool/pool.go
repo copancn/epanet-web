@@ -16,6 +16,7 @@ import (
 
 	"epanet-web/epanet"
 	"epanet-web/model"
+	"epanet-web/msx"
 )
 
 // RunFunc executes one simulation. It is injected so that pool does not depend
@@ -26,13 +27,21 @@ type RunFunc func(*model.Network) *model.SimResult
 // requests from stdin, writing results to stdout. Diagnostics go to stderr so
 // stdout stays a clean JSON stream. It returns on stdin EOF, which also happens
 // when the parent process dies and its pipe closes — so workers never orphan.
-func RunWorker(dllPath string, run RunFunc) {
-	serve(os.Stdin, os.Stdout, dllPath, run)
+func RunWorker(dllPath, msxPath string, run RunFunc) {
+	serve(os.Stdin, os.Stdout, dllPath, msxPath, run)
 }
 
-func serve(in io.Reader, out io.Writer, dllPath string, run RunFunc) {
+func serve(in io.Reader, out io.Writer, dllPath, msxPath string, run RunFunc) {
 	if err := epanet.Init(dllPath); err != nil {
 		log.Printf("worker: 初始化 EPANET 失败: %v", err)
+	}
+	// MSX is optional: load it after EPANET (so its epanet2.dll dependency
+	// resolves to the loaded module). A missing/failed MSX DLL only disables
+	// multi-species runs; single-species simulations still work.
+	if msxPath != "" {
+		if err := msx.Init(msxPath); err != nil {
+			log.Printf("worker: 初始化 EPANET-MSX 失败（多物种水质不可用）: %v", err)
+		}
 	}
 	dec := json.NewDecoder(in)
 	enc := json.NewEncoder(out)
@@ -71,6 +80,7 @@ func (w *worker) kill() {
 type Pool struct {
 	exePath string
 	dllPath string
+	msxPath string
 	size    int
 
 	idle chan *worker
@@ -82,8 +92,9 @@ type Pool struct {
 	wg     sync.WaitGroup // in-flight Submit calls
 }
 
-// New starts size worker subprocesses. size is clamped to at least 1.
-func New(size int, dllPath string) (*Pool, error) {
+// New starts size worker subprocesses. size is clamped to at least 1. msxPath
+// may be empty to disable multi-species (MSX) chemistry in the workers.
+func New(size int, dllPath, msxPath string) (*Pool, error) {
 	if size < 1 {
 		size = 1
 	}
@@ -94,6 +105,7 @@ func New(size int, dllPath string) (*Pool, error) {
 	p := &Pool{
 		exePath: exe,
 		dllPath: dllPath,
+		msxPath: msxPath,
 		size:    size,
 		idle:    make(chan *worker, size),
 		done:    make(chan struct{}),
@@ -112,7 +124,7 @@ func New(size int, dllPath string) (*Pool, error) {
 // spawn starts one worker. Callers hold p.mu (or are in single-threaded New).
 func (p *Pool) spawn() (*worker, error) {
 	p.nextID++
-	cmd := exec.Command(p.exePath, "-worker", "-dll", p.dllPath)
+	cmd := exec.Command(p.exePath, "-worker", "-dll", p.dllPath, "-msxdll", p.msxPath)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

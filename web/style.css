@@ -394,6 +394,17 @@ input[type=time] { font: inherit; font-size: 12px; padding: 5px 8px; border: 1px
 .prv-table input { width: 100%; font: inherit; font-size: 12px; padding: 5px 7px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text); }
 .prv-table input[type=number] { font-family: var(--mono); }
 .prv-table input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+/* ---------- MSX (multi-species water quality) ---------- */
+.msx-modal { width: 800px; }
+.msx-card-head { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.msx-preset-row { margin: 8px 0 2px; }
+.msx-raw { width: 100%; box-sizing: border-box; min-height: 180px; font-family: var(--mono); font-size: 12px; line-height: 1.5; padding: 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text); resize: vertical; }
+.msx-raw:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.msx-raw-btns { display: flex; gap: 6px; margin-top: 6px; }
+.msx-res-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.msx-res-head select { font: inherit; font-size: 12px; padding: 5px 7px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text); }
+.msx-chart { width: 100%; height: 220px; display: block; }
+#msxWrap table { margin-top: 4px; }
 .report-text { margin: 0; padding: 12px; font-family: var(--mono); font-size: 11px; line-height: 1.45; white-space: pre; overflow: auto; height: 100%; color: var(--text); }
 
 /* ---------- toast ---------- */

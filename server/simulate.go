@@ -6,6 +6,7 @@ import (
 
 	"epanet-web/epanet"
 	"epanet-web/model"
+	"epanet-web/msx"
 )
 
 // RunSimulation executes a hydraulic (and optional water-quality) analysis for
@@ -45,6 +46,21 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 		return res
 	}
 
+	// Multi-species (MSX) chemistry is opt-in. Validate and stage the .msx file
+	// now; the .hyd is captured after SolveH and the analysis runs at the end.
+	msxOn := net.MSX != nil && net.MSX.Enabled
+	msxPath := filepath.Join(dir, "net.msx")
+	hydPath := filepath.Join(dir, "net.hyd")
+	if msxOn {
+		if err := net.MSX.Validate(); err != nil {
+			res.Warnings = append(res.Warnings, "MSX: "+err.Error())
+			msxOn = false
+		} else if err := os.WriteFile(msxPath, []byte(net.ToMSX()), 0o644); err != nil {
+			res.Warnings = append(res.Warnings, "MSX: 写入 .msx 失败: "+err.Error())
+			msxOn = false
+		}
+	}
+
 	if err := epanet.Open(inpPath, rptPath, ""); err != nil {
 		res.Error = "打开管网失败: " + err.Error()
 		return res
@@ -70,6 +86,14 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 	}
 	if warn != "" {
 		res.Warnings = append(res.Warnings, "水力: "+warn)
+	}
+
+	// File-couple the solved hydraulics to MSX via an explicit .hyd file.
+	if msxOn {
+		if err := epanet.SaveHydFile(hydPath); err != nil {
+			res.Warnings = append(res.Warnings, "MSX: 保存水力文件失败: "+err.Error())
+			msxOn = false
+		}
 	}
 
 	// Populate the binary output file, which sets the engine's SaveQflag
@@ -105,10 +129,104 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 
 	res.Statistics = readStatistics()
 
+	// Multi-species analysis runs last, file-coupled to the saved hydraulics.
+	// Best-effort: any failure degrades to a warning, never aborting hydraulics.
+	if msxOn {
+		if mres, mwarn := runMSX(msxPath, hydPath, nodes, links); mwarn != "" {
+			res.Warnings = append(res.Warnings, "MSX: "+mwarn)
+		} else {
+			res.MSX = mres
+		}
+	}
+
 	res.Nodes = nodes
 	res.Links = links
 	res.OK = true
 	return res
+}
+
+// runMSX executes the multi-species analysis by file-coupling the saved EPANET
+// hydraulics (.hyd) with the generated .msx chemistry. EPANET must still be open
+// and the caller must hold epanet.Lock() (MSX shares EPANET's global state).
+// Returns a warning string on any failure; the result is nil in that case.
+func runMSX(msxPath, hydPath string, nodes []model.NodeSeries, links []model.LinkSeries) (*model.MSXResult, string) {
+	if !msx.Ready() {
+		return nil, "EPANET-MSX 动态库未加载"
+	}
+	if err := msx.Open(msxPath); err != nil {
+		return nil, "打开 .msx 失败: " + err.Error()
+	}
+	defer msx.Close()
+	if err := msx.UseHydFile(hydPath); err != nil {
+		return nil, "注册水力文件失败: " + err.Error()
+	}
+	return readMSXSeries(nodes, links)
+}
+
+// readMSXSeries steps the MSX quality solver over the whole period, sampling
+// every species at every node/link. MSXinit sets t=0 to the initial [QUALITY]
+// values; each MSXstep advances and returns the new time, so the initial state
+// is sampled before the first step and the loop ends when no time remains.
+func readMSXSeries(nodes []model.NodeSeries, links []model.LinkSeries) (*model.MSXResult, string) {
+	nspec, err := msx.SpeciesCount()
+	if err != nil {
+		return nil, "读取物种数失败: " + err.Error()
+	}
+	if nspec == 0 {
+		return nil, "未定义物种"
+	}
+	meta := make([]model.MSXSpeciesMeta, nspec)
+	for s := 1; s <= nspec; s++ {
+		id, _ := msx.ID(msx.Species, s)
+		info, err := msx.SpeciesAt(s)
+		if err != nil {
+			return nil, "读取物种属性失败: " + err.Error()
+		}
+		typ := "BULK"
+		if info.Type == msx.Wall {
+			typ = "WALL"
+		}
+		meta[s-1] = model.MSXSpeciesMeta{ID: id, Type: typ, Units: info.Units}
+	}
+
+	mn := make([]model.MSXNodeSeries, len(nodes))
+	for i, nd := range nodes {
+		mn[i] = model.MSXNodeSeries{ID: nd.ID, Index: nd.Index, Conc: make([][]float64, nspec)}
+	}
+	ml := make([]model.MSXLinkSeries, len(links))
+	for i, lk := range links {
+		ml[i] = model.MSXLinkSeries{ID: lk.ID, Index: lk.Index, Conc: make([][]float64, nspec)}
+	}
+	out := &model.MSXResult{Species: meta, Nodes: mn, Links: ml}
+
+	if err := msx.InitQual(0); err != nil {
+		return nil, "初始化水质失败: " + err.Error()
+	}
+	sample := func(t int64) {
+		out.Times = append(out.Times, t)
+		for s := 1; s <= nspec; s++ {
+			for i := range mn {
+				v, _ := msx.Qual(msx.Node, mn[i].Index, s)
+				mn[i].Conc[s-1] = append(mn[i].Conc[s-1], sanitize(v))
+			}
+			for i := range ml {
+				v, _ := msx.Qual(msx.Link, ml[i].Index, s)
+				ml[i].Conc[s-1] = append(ml[i].Conc[s-1], sanitize(v))
+			}
+		}
+	}
+	sample(0)
+	for {
+		t, tleft, err := msx.Step()
+		if err != nil {
+			return nil, "水质步进失败: " + err.Error()
+		}
+		sample(t)
+		if tleft <= 0 {
+			break
+		}
+	}
+	return out, ""
 }
 
 // readStatistics collects engine analysis statistics; nil if unavailable.

@@ -12,6 +12,7 @@ type SimResult struct {
 	Links      []LinkSeries `json:"links"`
 	Statistics *Statistics  `json:"statistics,omitempty"`
 	Report     string       `json:"report,omitempty"`
+	MSX        *MSXResult   `json:"msx,omitempty"`
 }
 
 // Statistics holds engine analysis statistics reported after a solve.

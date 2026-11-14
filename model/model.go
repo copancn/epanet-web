@@ -23,6 +23,7 @@ type Network struct {
 	Reactions   Reactions   `json:"reactions"`
 	Energy      Energy      `json:"energy"`
 	DemandModel DemandModel `json:"demandModel"`
+	MSX         *MSXConfig  `json:"msx,omitempty"`
 }
 
 // Node is a junction, reservoir or tank.

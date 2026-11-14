@@ -40,6 +40,8 @@ const state = {
   settingsOpen: 'analysis',
   wizard: null,
   leakWindow: { start: '02:00', end: '04:00' },
+  msxSpecies: 0,        // selected species index in MSX results
+  msxMap: null,         // hydraulic time index -> MSX sample index
 };
 
 const VALVE_TYPES = ['PRV', 'PSV', 'PBV', 'FCV', 'TCV', 'GPV', 'PCV'];
@@ -692,6 +694,7 @@ function select(sel) {
   buildPropsForm();
   renderElemList();
   highlightTableRow();
+  if (state.results && state.results.msx && !$('msxWrap').hidden) drawMsxChart();
   render();
 }
 
@@ -1652,11 +1655,13 @@ function showResults() {
   const slider = $('timeSlider'); slider.max = state.results.times.length - 1; slider.value = 0;
   if (state.results.units.quality) { $('nodeColor').querySelector('option[value=quality]').disabled = false; }
   else { $('nodeColor').querySelector('option[value=quality]').disabled = true; if (state.nodeColor === 'quality') { state.nodeColor = 'pressure'; $('nodeColor').value = 'pressure'; } }
-  updateTimeUI(); renderTables(); renderStats(); renderLeakage(); renderReport(); syncColorUI(); renderLegend(); buildPropsForm(); resize();
+  syncMSXColor();
+  updateTimeUI(); renderTables(); renderStats(); renderLeakage(); renderReport(); renderMSX(); syncColorUI(); renderLegend(); buildPropsForm(); resize();
   $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
 }
 function clearResults() {
   state.results = null; state.resNode = {}; state.resLink = {}; state.playing = false; state.stale = false;
+  clearMSXColor();
   $('resultBar').hidden = true; $('resultsPanel').hidden = true; updateRunButton();
   stopPlay(); resize();
 }
@@ -1667,7 +1672,7 @@ function updateTimeUI() {
   if (!$('canvasTip').hidden && state.hover) updateTip(state.hover, state.mouse.sx, state.mouse.sy);
   redrawChartIfOpen();
 }
-$('timeSlider').addEventListener('input', e => { state.timeIndex = +e.target.value; updateTimeUI(); renderTables(); renderLegend(); buildPropsForm(); render(); });
+$('timeSlider').addEventListener('input', e => { state.timeIndex = +e.target.value; updateTimeUI(); renderTables(); renderMSX(); renderLegend(); buildPropsForm(); render(); });
 $('nodeColor').addEventListener('change', e => { state.nodeColor = e.target.value; renderLegend(); render(); });
 $('linkColor').addEventListener('change', e => { state.linkColor = e.target.value; renderLegend(); render(); });
 $('chkColorByValue').addEventListener('change', e => { state.colorByValue = e.target.checked; syncColorUI(); renderLegend(); render(); });
@@ -1684,7 +1689,7 @@ function startPlay() {
   if (!state.results) return; state.playing = true; $('btnPlay').textContent = '⏸';
   playTimer = setInterval(() => {
     state.timeIndex = (state.timeIndex + 1) % state.results.times.length;
-    updateTimeUI(); renderTables(); renderLegend(); render();
+    updateTimeUI(); renderTables(); renderMSX(); renderLegend(); render();
   }, 700);
 }
 function stopPlay() { state.playing = false; $('btnPlay').textContent = '▶'; if (playTimer) clearInterval(playTimer); playTimer = null; }
@@ -1700,8 +1705,9 @@ function renderLegend() {
   el.innerHTML = `<span>${labelFor(state.nodeColor)}</span><span class="legend-gradient" style="background:${grad}"></span><span>${fmt(nr.min)} ~ ${fmt(nr.max)} ${unit}</span>`;
 }
 const METRIC_LABEL = { demandDeficit: 'deficit' };
-function labelFor(k) { const lk = METRIC_LABEL[k] || k; const s = t('m.' + lk); return s !== 'm.' + lk ? s : k; }
+function labelFor(k) { if (k.indexOf('msx:') === 0) return k.slice(4); const lk = METRIC_LABEL[k] || k; const s = t('m.' + lk); return s !== 'm.' + lk ? s : k; }
 function metricUnit(k) {
+  if (k.indexOf('msx:') === 0) { const m = state.results && state.results.msx; const sp = m && m.species.find(s => 'msx:' + s.id === k); return sp ? msxUnitLabel(sp.units) : ''; }
   const u = state.results ? state.results.units : {};
   switch (k) {
     case 'pressure': return u.pressure;
@@ -1726,8 +1732,10 @@ document.querySelectorAll('.rptab').forEach(b => b.addEventListener('click', () 
   $('nodeTableWrap').hidden = tab !== 'nodes'; $('linkTableWrap').hidden = tab !== 'links';
   $('statsWrap').hidden = tab !== 'stats'; $('reportWrap').hidden = tab !== 'report';
   $('leakWrap').hidden = tab !== 'leak';
+  $('msxWrap').hidden = tab !== 'msx';
   $('warningsWrap').hidden = tab !== 'warnings';
   if (tab === 'report') ensureReport().catch(e => toast(t('err.report') + e.message, 'err'));
+  if (tab === 'msx') renderMSX();
 }));
 $('btnToggleResults').addEventListener('click', () => $('resultsPanel').classList.toggle('collapsed'));
 
@@ -2138,9 +2146,10 @@ function refreshLangUI() {
   if (!$('reviewModal').hidden) { state.review = reviewNetwork(); renderReview(); }
   if (!$('gisModal').hidden) renderGisModal();
   if (!$('dataModal').hidden && dataRows) { renderDataTabs(); renderDataTree(); redrawEditors(); }
+  if (!$('msxModal').hidden && msxDraft) renderMsxConfig();
   updateAttribution();
   if (state.results) {
-    renderTables(); renderStats(); renderLeakage(); renderReport(); renderLegend(); updateTimeUI();
+    renderTables(); renderStats(); renderLeakage(); renderReport(); renderMSX(); renderLegend(); updateTimeUI();
     $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
     redrawChartIfOpen();
   }
@@ -2464,6 +2473,407 @@ async function demApply(nodes) {
 }
 
 /* ============================ init ============================ */
+/* ============================ MSX multi-species chemistry ============================ */
+function msxDefault() {
+  return {
+    enabled: false, title: '',
+    options: { areaUnits: 'FT2', rateUnits: 'DAY', solver: 'EUL', timeStep: 300, rtol: 0.001, atol: 0.001, coupling: '' },
+    species: [], coeffs: [], terms: [], pipeRate: [], pipeEquil: [], tankRate: [], tankEquil: [],
+    sources: [], quality: [], params: [], report: { nodes: [], links: [], species: [] },
+  };
+}
+function msxChlorinePreset() {
+  return {
+    enabled: true, title: 'Chlorine decay (bulk + wall)',
+    options: { areaUnits: 'FT2', rateUnits: 'DAY', solver: 'EUL', timeStep: 300, rtol: 0.001, atol: 0.001, coupling: '' },
+    species: [{ id: 'CL2', type: 'BULK', units: 'MG', atol: 0.01, rtol: 0.001 }],
+    coeffs: [{ kind: 'PARAMETER', id: 'Kb', value: 0.3 }, { kind: 'PARAMETER', id: 'Kw', value: 1.0 }],
+    terms: [{ id: 'Kf', expr: '1.5826e-4 * RE^0.88 / D' }],
+    pipeRate: [{ species: 'CL2', expr: '-Kb*CL2 - (4/D)*Kw*Kf/(Kw+Kf)*CL2' }], pipeEquil: [],
+    tankRate: [{ species: 'CL2', expr: '-Kb*CL2' }], tankEquil: [],
+    sources: [], quality: [], params: [], report: { nodes: [], links: [], species: [] },
+  };
+}
+function msxUnitLabel(u) {
+  switch ((u || '').toUpperCase()) {
+    case 'MG': return 'mg/L'; case 'UG': return 'µg/L';
+    case 'MOLE': return 'mol/L'; case 'MMOL': return 'mmol/L';
+    default: return u || '';
+  }
+}
+// msxToText mirrors the Go model.ToMSX generator (section order + tab delimiters).
+function msxToText(c) {
+  const L = [];
+  const num = v => (typeof v === 'number' && isFinite(v)) ? String(v) : '0';
+  L.push('[TITLE]', c.title || 'EPANET Web MSX', '', '[OPTIONS]');
+  const o = c.options || {};
+  if (o.areaUnits) L.push('AREA_UNITS\t' + o.areaUnits);
+  if (o.rateUnits) L.push('RATE_UNITS\t' + o.rateUnits);
+  if (o.solver) L.push('SOLVER\t' + o.solver);
+  if (o.timeStep > 0) L.push('TIMESTEP\t' + num(o.timeStep));
+  if (o.rtol > 0) L.push('RTOL\t' + num(o.rtol));
+  if (o.atol > 0) L.push('ATOL\t' + num(o.atol));
+  if (o.coupling) L.push('COUPLING\t' + o.coupling);
+  L.push('', '[SPECIES]');
+  (c.species || []).forEach(s => L.push((s.type || 'BULK') + '\t' + s.id + '\t' + (s.units || 'MG') + '\t' + num(s.atol == null ? 0.01 : s.atol) + '\t' + num(s.rtol == null ? 0.001 : s.rtol)));
+  if ((c.coeffs || []).length) { L.push('', '[COEFFICIENTS]'); c.coeffs.forEach(f => L.push((f.kind || 'PARAMETER') + '\t' + f.id + '\t' + num(f.value))); }
+  if ((c.terms || []).length) { L.push('', '[TERMS]'); c.terms.forEach(x => L.push(x.id + '\t' + x.expr)); }
+  const rates = (name, rr, eq) => {
+    if (!(rr || []).length && !(eq || []).length) return;
+    L.push('', '[' + name + ']');
+    (rr || []).forEach(r => L.push('RATE\t' + r.species + '\t' + r.expr));
+    (eq || []).forEach(r => L.push('EQUIL\t' + r.species + '\t' + r.expr));
+  };
+  rates('PIPE', c.pipeRate, c.pipeEquil); rates('TANK', c.tankRate, c.tankEquil);
+  if ((c.sources || []).length) { L.push('', '[SOURCES]'); c.sources.forEach(s => L.push((s.type || 'CONC') + '\t' + s.node + '\t' + s.species + '\t' + num(s.strength) + (s.pattern ? '\t' + s.pattern : ''))); }
+  if ((c.quality || []).length) {
+    L.push('', '[QUALITY]');
+    c.quality.forEach(q => {
+      if ((q.scope || '').toUpperCase() === 'GLOBAL') L.push('GLOBAL\t' + q.species + '\t' + num(q.value));
+      else L.push((q.scope || 'NODE').toUpperCase() + '\t' + q.id + '\t' + q.species + '\t' + num(q.value));
+    });
+  }
+  if ((c.params || []).length) { L.push('', '[PARAMETERS]'); c.params.forEach(p => L.push((p.kind || 'PIPE').toUpperCase() + '\t' + p.id + '\t' + p.param + '\t' + num(p.value))); }
+  const rp = c.report || {};
+  if ((rp.nodes || []).length || (rp.links || []).length || (rp.species || []).length) {
+    L.push('', '[REPORT]');
+    if ((rp.nodes || []).length) L.push('NODES\t' + rp.nodes.join('\t'));
+    if ((rp.links || []).length) L.push('LINKS\t' + rp.links.join('\t'));
+    (rp.species || []).forEach(s => L.push('SPECIE\t' + s + '\tYES'));
+  }
+  return L.join('\n') + '\n';
+}
+// msxParse reads a .msx file back into a config (whitespace tokens, ; comments).
+function msxParse(text) {
+  const c = msxDefault();
+  const up = s => (s || '').toUpperCase();
+  let sec = '';
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.replace(/;.*$/, '').trim();
+    if (!line) continue;
+    const m = line.match(/^\[([A-Za-z]+)\]$/);
+    if (m) { sec = m[1].toUpperCase(); continue; }
+    const tk = line.split(/\s+/);
+    if (sec === 'TITLE') c.title = (c.title ? c.title + ' ' : '') + line;
+    else if (sec === 'OPTIONS') {
+      const k = up(tk[0]), v = tk[1];
+      if (k === 'AREA_UNITS') c.options.areaUnits = up(v);
+      else if (k === 'RATE_UNITS') c.options.rateUnits = up(v);
+      else if (k === 'SOLVER') c.options.solver = up(v);
+      else if (k === 'TIMESTEP') c.options.timeStep = parseFloat(v) || 0;
+      else if (k === 'RTOL') c.options.rtol = parseFloat(v) || 0;
+      else if (k === 'ATOL') c.options.atol = parseFloat(v) || 0;
+      else if (k === 'COUPLING') c.options.coupling = up(v);
+    }
+    else if (sec === 'SPECIES') c.species.push({ type: up(tk[0]), id: tk[1], units: up(tk[2]), atol: parseFloat(tk[3]) || 0.01, rtol: parseFloat(tk[4]) || 0.001 });
+    else if (sec === 'COEFFICIENTS') c.coeffs.push({ kind: up(tk[0]), id: tk[1], value: parseFloat(tk[2]) || 0 });
+    else if (sec === 'TERMS') c.terms.push({ id: tk[0], expr: tk.slice(1).join(' ') });
+    else if (sec === 'PIPE' || sec === 'TANK') {
+      const kind = up(tk[0]), r = { species: tk[1], expr: tk.slice(2).join(' ') };
+      const rk = sec === 'PIPE' ? 'pipeRate' : 'tankRate', ek = sec === 'PIPE' ? 'pipeEquil' : 'tankEquil';
+      if (kind === 'RATE') c[rk].push(r); else if (kind === 'EQUIL') c[ek].push(r);
+    }
+    else if (sec === 'SOURCES') c.sources.push({ type: up(tk[0]), node: tk[1], species: tk[2], strength: parseFloat(tk[3]) || 0, pattern: tk[4] || '' });
+    else if (sec === 'QUALITY') {
+      if (up(tk[0]) === 'GLOBAL') c.quality.push({ scope: 'GLOBAL', id: '', species: tk[1], value: parseFloat(tk[2]) || 0 });
+      else c.quality.push({ scope: up(tk[0]), id: tk[1], species: tk[2], value: parseFloat(tk[3]) || 0 });
+    }
+    else if (sec === 'PARAMETERS') c.params.push({ kind: up(tk[0]), id: tk[1], param: tk[2], value: parseFloat(tk[3]) || 0 });
+    else if (sec === 'REPORT') {
+      const k = up(tk[0]);
+      if (k === 'NODES') c.report.nodes = tk.slice(1);
+      else if (k === 'LINKS') c.report.links = tk.slice(1);
+      else if (k === 'SPECIE') c.report.species.push(tk[1]);
+    }
+  }
+  if (!c.species.length) throw new Error(t('msx.noSpecies'));
+  c.enabled = true;
+  return c;
+}
+
+let msxDraft = null;
+let msxRawText = '';
+function msxSpeciesOpts() { return (msxDraft.species || []).map(s => [s.id, s.id]); }
+function openMsx() {
+  const base = msxDefault();
+  msxDraft = state.net.msx ? { ...base, ...JSON.parse(JSON.stringify(state.net.msx)) } : base;
+  msxDraft.options = { ...base.options, ...(msxDraft.options || {}) };
+  msxDraft.report = { ...base.report, ...(msxDraft.report || {}) };
+  msxRawText = msxDraft.enabled ? msxToText(msxDraft) : '';
+  $('msxModal').hidden = false;
+  renderMsxConfig();
+}
+function closeMsx() { $('msxModal').hidden = true; }
+function applyMsx() {
+  if (msxDraft.enabled && !(msxDraft.species || []).length) { toast(t('msx.noSpecies'), 'err'); return; }
+  state.net.msx = msxDraft;
+  markDirty(true);
+  closeMsx();
+  toast(t('msx.applied'), 'ok');
+}
+function msxCardHead(card, onDel) {
+  const head = document.createElement('div'); head.className = 'msx-card-head';
+  const del = document.createElement('button'); del.className = 'dc-del'; del.textContent = '✕'; del.title = t('msx.delete');
+  del.addEventListener('click', onDel);
+  head.appendChild(del); card.appendChild(head);
+}
+function msxCardList(arrKey, titleKey, addKey, newItem, buildFields) {
+  const wrap = document.createElement('div');
+  wrap.appendChild(sectionTitle(t(titleKey)));
+  const list = document.createElement('div'); wrap.appendChild(list);
+  function rebuild() {
+    list.innerHTML = '';
+    (msxDraft[arrKey] || []).forEach((item, idx) => {
+      const card = document.createElement('div'); card.className = 'demand-card';
+      msxCardHead(card, () => { msxDraft[arrKey].splice(idx, 1); rebuild(); });
+      buildFields(card, item);
+      list.appendChild(card);
+    });
+  }
+  rebuild();
+  wrap.appendChild(btnSm(t(addKey), () => { msxDraft[arrKey] = msxDraft[arrKey] || []; msxDraft[arrKey].push(newItem()); rebuild(); }));
+  return wrap;
+}
+function msxSpeciesEditor() {
+  const wrap = document.createElement('div');
+  wrap.appendChild(sectionTitle(t('msx.species')));
+  const list = document.createElement('div'); wrap.appendChild(list);
+  (msxDraft.species || []).forEach((s, idx) => {
+    const card = document.createElement('div'); card.className = 'demand-card';
+    msxCardHead(card, () => { msxDraft.species.splice(idx, 1); renderMsxConfig(); });
+    let r = document.createElement('div'); r.className = 'field-row';
+    r.appendChild(field(t('msx.speciesId'), textInput(s.id, v => { s.id = v; renderMsxConfig(); })));
+    r.appendChild(field(t('msx.speciesType'), selectInput(s.type, [['BULK', t('msx.bulk')], ['WALL', t('msx.wall')]], v => s.type = v)));
+    r.appendChild(field(t('msx.speciesUnits'), selectInput(s.units, ['MG', 'UG', 'MOLE', 'MMOL'], v => s.units = v)));
+    card.appendChild(r);
+    r = document.createElement('div'); r.className = 'field-row';
+    r.appendChild(field(t('msx.atol'), numInput(s.atol, v => s.atol = v)));
+    r.appendChild(field(t('msx.rtol'), numInput(s.rtol, v => s.rtol = v)));
+    card.appendChild(r);
+    list.appendChild(card);
+  });
+  wrap.appendChild(btnSm(t('msx.addSpecies'), () => {
+    msxDraft.species = msxDraft.species || [];
+    msxDraft.species.push({ id: 'SP' + (msxDraft.species.length + 1), type: 'BULK', units: 'MG', atol: 0.01, rtol: 0.001 });
+    renderMsxConfig();
+  }));
+  return wrap;
+}
+function msxRateEditor(arrKey, titleKey) {
+  return msxCardList(arrKey, titleKey, 'msx.addRate',
+    () => ({ species: (msxDraft.species[0] || {}).id || '', expr: '' }),
+    (card, r) => {
+      const row = document.createElement('div'); row.className = 'field-row';
+      row.appendChild(field(t('msx.rateSpecies'), selectInput(r.species, msxSpeciesOpts(), v => r.species = v)));
+      card.appendChild(row);
+      card.appendChild(field(t('msx.rateExpr'), textInput(r.expr, v => r.expr = v)));
+    });
+}
+function renderMsxConfig() {
+  const body = $('msxBody'); body.innerHTML = '';
+  body.appendChild(checkRow(t('msx.enable'), msxDraft.enabled, v => { msxDraft.enabled = v; renderMsxConfig(); }));
+  const hint = document.createElement('div'); hint.className = 'ed-hint'; hint.textContent = t('msx.disabledHint'); body.appendChild(hint);
+  const presetRow = document.createElement('div'); presetRow.className = 'msx-preset-row';
+  presetRow.appendChild(btnSm(t('msx.preset'), () => { msxDraft = msxChlorinePreset(); msxRawText = msxToText(msxDraft); renderMsxConfig(); toast(t('msx.presetLoaded'), 'ok'); }));
+  body.appendChild(presetRow);
+  const ph = document.createElement('div'); ph.className = 'ed-hint'; ph.textContent = t('msx.presetHint'); body.appendChild(ph);
+  body.appendChild(field(t('msx.titleLabel'), textInput(msxDraft.title, v => { msxDraft.title = v; })));
+
+  body.appendChild(sectionTitle(t('msx.options')));
+  const o = msxDraft.options;
+  let r = document.createElement('div'); r.className = 'field-row';
+  r.appendChild(field(t('msx.areaUnits'), selectInput(o.areaUnits, ['FT2', 'M2', 'CM2'], v => o.areaUnits = v)));
+  r.appendChild(field(t('msx.rateUnits'), selectInput(o.rateUnits, ['DAY', 'HR', 'MIN', 'SEC'], v => o.rateUnits = v)));
+  r.appendChild(field(t('msx.solver'), selectInput(o.solver, ['EUL', 'RK5', 'ROS2'], v => o.solver = v)));
+  body.appendChild(r);
+  r = document.createElement('div'); r.className = 'field-row';
+  r.appendChild(field(t('msx.timeStep'), numInput(o.timeStep, v => o.timeStep = v)));
+  r.appendChild(field(t('msx.rtol'), numInput(o.rtol, v => o.rtol = v)));
+  r.appendChild(field(t('msx.atol'), numInput(o.atol, v => o.atol = v)));
+  body.appendChild(r);
+  r = document.createElement('div'); r.className = 'field-row';
+  r.appendChild(field(t('msx.coupling'), selectInput(o.coupling || '', [['', t('opt.none')], 'FULL', 'NONE'], v => o.coupling = v)));
+  body.appendChild(r);
+
+  body.appendChild(msxSpeciesEditor());
+  body.appendChild(msxCardList('coeffs', 'msx.coeffs', 'msx.addCoeff', () => ({ kind: 'PARAMETER', id: '', value: 0 }), (card, f) => {
+    const row = document.createElement('div'); row.className = 'field-row';
+    row.appendChild(field(t('msx.coeffKind'), selectInput(f.kind, [['PARAMETER', t('msx.parameter')], ['CONSTANT', t('msx.constant')]], v => f.kind = v)));
+    row.appendChild(field(t('msx.coeffId'), textInput(f.id, v => f.id = v)));
+    row.appendChild(field(t('msx.coeffValue'), numInput(f.value, v => f.value = v)));
+    card.appendChild(row);
+  }));
+  body.appendChild(msxCardList('terms', 'msx.terms', 'msx.addTerm', () => ({ id: '', expr: '' }), (card, x) => {
+    const row = document.createElement('div'); row.className = 'field-row';
+    row.appendChild(field(t('msx.termId'), textInput(x.id, v => x.id = v)));
+    card.appendChild(row);
+    card.appendChild(field(t('msx.termExpr'), textInput(x.expr, v => x.expr = v)));
+  }));
+  body.appendChild(msxRateEditor('pipeRate', 'msx.pipeRate'));
+  body.appendChild(msxRateEditor('tankRate', 'msx.tankRate'));
+  body.appendChild(msxCardList('sources', 'msx.sources', 'msx.addSource',
+    () => ({ type: 'CONC', node: (state.net.nodes[0] || {}).id || '', species: (msxDraft.species[0] || {}).id || '', strength: 0, pattern: '' }),
+    (card, s) => {
+      let row = document.createElement('div'); row.className = 'field-row';
+      row.appendChild(field(t('msx.sourceType'), selectInput(s.type, [['CONC', t('msx.conc')], ['MASS', t('msx.mass')], ['SETPOINT', t('msx.setpoint')], ['FLOWPACED', t('msx.flowpaced')]], v => s.type = v)));
+      row.appendChild(field(t('msx.sourceNode'), selectInput(s.node, nodeOptions(), v => s.node = v)));
+      row.appendChild(field(t('msx.sourceSpecies'), selectInput(s.species, msxSpeciesOpts(), v => s.species = v)));
+      card.appendChild(row);
+      row = document.createElement('div'); row.className = 'field-row';
+      row.appendChild(field(t('msx.sourceStrength'), numInput(s.strength, v => s.strength = v)));
+      row.appendChild(field(t('msx.sourcePattern'), selectInput(s.pattern, patternOptions(), v => s.pattern = v)));
+      card.appendChild(row);
+    }));
+  body.appendChild(msxCardList('quality', 'msx.quality', 'msx.addQuality',
+    () => ({ scope: 'GLOBAL', id: '', species: (msxDraft.species[0] || {}).id || '', value: 0 }),
+    (card, q) => {
+      const row = document.createElement('div'); row.className = 'field-row';
+      row.appendChild(field(t('msx.qualityScope'), selectInput(q.scope, [['GLOBAL', t('msx.global')], ['NODE', t('msx.node')], ['LINK', t('msx.link')]], v => { q.scope = v; renderMsxConfig(); })));
+      row.appendChild(field(t('msx.qualitySpecies'), selectInput(q.species, msxSpeciesOpts(), v => q.species = v)));
+      row.appendChild(field(t('msx.qualityValue'), numInput(q.value, v => q.value = v)));
+      card.appendChild(row);
+      if (q.scope !== 'GLOBAL') card.appendChild(field(t('msx.qualityId'), selectInput(q.id, q.scope === 'NODE' ? nodeOptions() : linkOptions(), v => q.id = v)));
+    }));
+
+  body.appendChild(sectionTitle(t('msx.raw')));
+  const ta = document.createElement('textarea'); ta.className = 'msx-raw'; ta.value = msxRawText; ta.spellcheck = false;
+  ta.addEventListener('input', () => { msxRawText = ta.value; });
+  body.appendChild(ta);
+  const btnRow = document.createElement('div'); btnRow.className = 'msx-raw-btns';
+  btnRow.appendChild(btnSm(t('msx.generate'), () => { msxRawText = msxToText(msxDraft); ta.value = msxRawText; }));
+  btnRow.appendChild(btnSm(t('msx.parse'), () => {
+    try { msxDraft = msxParse(ta.value); msxRawText = ta.value; renderMsxConfig(); }
+    catch (e) { toast(t('msx.parseError', e.message), 'err'); }
+  }));
+  body.appendChild(btnRow);
+  const rh = document.createElement('div'); rh.className = 'ed-hint'; rh.textContent = t('msx.rawHint'); body.appendChild(rh);
+}
+$('btnMsx').addEventListener('click', openMsx);
+$('btnCloseMsx').addEventListener('click', closeMsx);
+$('btnMsxCancel').addEventListener('click', closeMsx);
+$('btnMsxApply').addEventListener('click', applyMsx);
+$('msxModal').addEventListener('click', e => { if (e.target === $('msxModal')) closeMsx(); });
+
+/* ---- MSX results: map coloring + tab ---- */
+function msxNearest(target) {
+  const ts = state.results.msx.times;
+  if (target <= ts[0]) return 0;
+  const last = ts.length - 1;
+  if (target >= ts[last]) return last;
+  let lo = 0, hi = last;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] < target) lo = mid + 1; else hi = mid; }
+  if (lo > 0 && Math.abs(ts[lo - 1] - target) < Math.abs(ts[lo] - target)) return lo - 1;
+  return lo;
+}
+function msxTimeIndex(ti) { return state.msxMap ? (state.msxMap[ti] || 0) : 0; }
+function clearMSXColor() {
+  ['nodeColor', 'linkColor'].forEach(id => {
+    const sel = $(id);
+    Array.from(sel.options).filter(o => o.value.indexOf('msx:') === 0).forEach(o => o.remove());
+  });
+  if (state.nodeColor.indexOf('msx:') === 0) { state.nodeColor = 'pressure'; $('nodeColor').value = 'pressure'; }
+  if (state.linkColor.indexOf('msx:') === 0) { state.linkColor = 'flow'; $('linkColor').value = 'flow'; }
+  state.msxMap = null;
+}
+// Resample MSX concentrations onto the hydraulic reporting timeline and expose
+// them as color metrics ('msx:<id>') so the existing map/legend machinery works.
+function syncMSXColor() {
+  clearMSXColor();
+  const m = state.results && state.results.msx;
+  if (!m || !m.species.length) return;
+  state.msxMap = state.results.times.map(sec => msxNearest(sec));
+  const mNode = {}; m.nodes.forEach(n => mNode[n.id] = n);
+  const mLink = {}; m.links.forEach(l => mLink[l.id] = l);
+  const nt = state.results.times.length;
+  m.species.forEach((sp, si) => {
+    const key = 'msx:' + sp.id;
+    state.results.nodes.forEach(n => {
+      const src = mNode[n.id], arr = new Array(nt);
+      for (let ti = 0; ti < nt; ti++) arr[ti] = src ? src.conc[si][state.msxMap[ti]] : NaN;
+      state.resNode[n.id][key] = arr;
+    });
+    state.results.links.forEach(l => {
+      const src = mLink[l.id], arr = new Array(nt);
+      for (let ti = 0; ti < nt; ti++) arr[ti] = src ? src.conc[si][state.msxMap[ti]] : NaN;
+      state.resLink[l.id][key] = arr;
+    });
+    const label = sp.id + ' · ' + msxUnitLabel(sp.units);
+    ['nodeColor', 'linkColor'].forEach(id => {
+      const op = document.createElement('option'); op.value = key; op.textContent = label; $(id).appendChild(op);
+    });
+  });
+}
+function renderMSX() {
+  const el = $('msxWrap'); if (!el) return;
+  const m = state.results && state.results.msx;
+  if (!m || !m.species.length) { el.innerHTML = `<div class="warn-none">${esc(t('msx.noResult'))}</div>`; return; }
+  if (state.msxSpecies >= m.species.length) state.msxSpecies = 0;
+  const si = state.msxSpecies, sp = m.species[si], unit = msxUnitLabel(sp.units);
+  const mi = msxTimeIndex(state.timeIndex);
+  const mNode = {}; m.nodes.forEach(n => mNode[n.id] = n);
+  const mLink = {}; m.links.forEach(l => mLink[l.id] = l);
+  let h = `<div class="msx-res-head"><label>${esc(t('msx.speciesSelect'))} <select id="msxSpeciesSel">`;
+  m.species.forEach((s, i) => { h += `<option value="${i}"${i === si ? ' selected' : ''}>${esc(s.id)} · ${esc(msxUnitLabel(s.units))}</option>`; });
+  h += `</select></label><span class="ed-hint">${esc(t('msx.timeNote', clock(state.results.times[state.timeIndex])))}</span></div>`;
+  h += `<div class="prop-section-title">${esc(t('msx.nodeConc'))} (${esc(unit)})</div>`;
+  h += `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.type')}</th><th>${esc(t('msx.conc'))} (${esc(unit)})</th></tr></thead><tbody>`;
+  state.results.nodes.forEach(n => { const src = mNode[n.id]; const v = src ? src.conc[si][mi] : NaN; h += `<tr data-kind="node" data-id="${esc(n.id)}"><td>${esc(n.id)}</td><td>${n.type}</td><td class="num">${fmt(v)}</td></tr>`; });
+  h += `</tbody></table>`;
+  h += `<div class="prop-section-title">${esc(t('msx.linkConc'))} (${esc(unit)})</div>`;
+  h += `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.fromTo')}</th><th>${esc(t('msx.conc'))} (${esc(unit)})</th></tr></thead><tbody>`;
+  state.results.links.forEach(l => { const src = mLink[l.id]; const v = src ? src.conc[si][mi] : NaN; h += `<tr data-kind="link" data-id="${esc(l.id)}"><td>${esc(l.id)}</td><td>${esc(l.from)}→${esc(l.to)}</td><td class="num">${fmt(v)}</td></tr>`; });
+  h += `</tbody></table>`;
+  h += `<div class="prop-section-title">${esc(t('msx.resTitle'))}</div>`;
+  h += `<canvas id="msxChart" class="msx-chart"></canvas><div class="ed-hint" id="msxChartHint">${esc(t('msx.chartHint'))}</div>`;
+  el.innerHTML = h;
+  $('msxSpeciesSel').addEventListener('change', e => { state.msxSpecies = +e.target.value; renderMSX(); });
+  el.querySelectorAll('tr[data-id]').forEach(tr => tr.addEventListener('click', () => select({ kind: tr.dataset.kind, id: tr.dataset.id })));
+  highlightTableRow();
+  drawMsxChart();
+}
+function drawMsxChart() {
+  const cv = $('msxChart'); if (!cv) return;
+  const m = state.results && state.results.msx; if (!m) return;
+  const hint = $('msxChartHint');
+  let series = null, id = '';
+  if (state.sel) {
+    const arr = state.sel.kind === 'node' ? m.nodes : m.links;
+    const f = arr.find(x => x.id === state.sel.id);
+    if (f) { series = f.conc[state.msxSpecies]; id = state.sel.id; }
+  }
+  if (!series) { cv.style.display = 'none'; if (hint) hint.style.display = ''; return; }
+  cv.style.display = ''; if (hint) hint.style.display = 'none';
+  const sp = m.species[state.msxSpecies], vals = series, times = m.times, n = vals.length, p = pal();
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || 480, H = cv.clientHeight || 220;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+  let min = Infinity, max = -Infinity;
+  vals.forEach(v => { if (typeof v === 'number' && isFinite(v)) { if (v < min) min = v; if (v > max) max = v; } });
+  if (!isFinite(min)) { min = 0; max = 1; }
+  if (min === max) { min -= 1; max += 1; }
+  const padL = 52, padR = 14, padT = 22, padB = 28;
+  const pw = Math.max(1, W - padL - padR), ph = Math.max(1, H - padT - padB);
+  const X = i => padL + (n > 1 ? (i / (n - 1)) * pw : pw / 2);
+  const Y = v => padT + ph - ((v - min) / (max - min)) * ph;
+  c.font = '11px system-ui, sans-serif'; c.lineWidth = 1;
+  c.fillStyle = p.label; c.textAlign = 'left'; c.textBaseline = 'top';
+  c.fillText(t('msx.chartTitle', id, sp.id) + ' (' + msxUnitLabel(sp.units) + ')', padL, 4);
+  const gy = 4;
+  for (let g = 0; g <= gy; g++) {
+    const v = min + (max - min) * (g / gy), y = Y(v);
+    c.strokeStyle = p.grid; c.beginPath(); c.moveTo(padL, y); c.lineTo(W - padR, y); c.stroke();
+    c.fillStyle = p.labelDim; c.textAlign = 'right'; c.textBaseline = 'middle'; c.fillText(fmt(v), padL - 6, y);
+  }
+  const nx = Math.min(6, n); c.textAlign = 'center'; c.textBaseline = 'top'; c.fillStyle = p.labelDim;
+  for (let k = 0; k < nx; k++) { const i = nx > 1 ? Math.round(k * (n - 1) / (nx - 1)) : 0; c.fillText(clock(times[i]), X(i), H - padB + 6); }
+  c.strokeStyle = p.sel; c.lineWidth = 2; c.lineJoin = 'round'; c.beginPath();
+  vals.forEach((v, i) => { const x = X(i), y = Y(v); i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
+  const mi = Math.min(msxTimeIndex(state.timeIndex), n - 1), mx = X(mi), my = Y(vals[mi]);
+  c.strokeStyle = p.hover; c.lineWidth = 1; c.beginPath(); c.moveTo(mx, padT); c.lineTo(mx, H - padB); c.stroke();
+  c.fillStyle = p.sel; c.beginPath(); c.arc(mx, my, 3.5, 0, Math.PI * 2); c.fill();
+}
+
 async function init() {
   buildSettings(); renderElemList(); updateRunButton(); syncMapUI(); syncColorUI(); updateThemeBtn();
   try {

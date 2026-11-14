@@ -165,7 +165,7 @@ func Unlock() { mu.Unlock() }
 
 var procNames = []string{
 	"ENopen", "ENclose", "ENgetversion", "ENgeterror", "ENsaveinpfile", "ENgettitle",
-	"ENsolveH", "ENsaveH", "ENopenH", "ENinitH", "ENrunH", "ENnextH", "ENcloseH",
+	"ENsolveH", "ENsaveH", "ENsavehydfile", "ENopenH", "ENinitH", "ENrunH", "ENnextH", "ENcloseH",
 	"ENsolveQ", "ENopenQ", "ENinitQ", "ENrunQ", "ENnextQ", "ENcloseQ",
 	"ENgetcount", "ENgetnodeid", "ENgetlinkid", "ENgetnodetype", "ENgetlinktype",
 	"ENgetnodeindex", "ENgetlinkindex", "ENgetlinknodes", "ENgetcoord",
@@ -275,6 +275,9 @@ func Title() (string, string, string, error) {
 
 func SolveH() (string, error) { return solveCall("ENsolveH") }
 func SaveH() error            { return call("ENsaveH") }
+
+// SaveHydFile writes the computed hydraulics to a binary .hyd file (for MSX).
+func SaveHydFile(path string) error { return call("ENsavehydfile", cstr(path)) }
 func OpenH() error            { return call("ENopenH") }
 func InitH(flag int) error    { return call("ENinitH", uintptr(flag)) }
 func CloseH() error           { return call("ENcloseH") }
