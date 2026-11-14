@@ -79,17 +79,17 @@ func handleExample(w http.ResponseWriter, r *http.Request) {
 func handleSimulate(p *pool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			http.Error(w, model.ErrPostRequired, http.StatusMethodNotAllowed)
 			return
 		}
 		defer recoverTo(w)
 		var net model.Network
 		if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&net); err != nil {
-			writeJSON(w, &model.SimResult{Error: "请求 JSON 解析失败: " + err.Error()})
+			writeJSON(w, &model.SimResult{Error: model.ErrMsg(model.ErrBadJSON, err)})
 			return
 		}
 		if len(net.Nodes) == 0 {
-			writeJSON(w, &model.SimResult{Error: "管网为空：请先添加节点"})
+			writeJSON(w, &model.SimResult{Error: model.NewMsg(model.ErrEmptyNet)})
 			return
 		}
 		if p == nil {
@@ -102,17 +102,17 @@ func handleSimulate(p *pool.Pool) http.HandlerFunc {
 
 func handleReport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		http.Error(w, model.ErrPostRequired, http.StatusMethodNotAllowed)
 		return
 	}
 	defer recoverTo(w)
 	var net model.Network
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&net); err != nil {
-		writeJSON(w, &model.SimResult{Error: "请求 JSON 解析失败: " + err.Error()})
+		writeJSON(w, &model.SimResult{Error: model.ErrMsg(model.ErrBadJSON, err)})
 		return
 	}
 	if len(net.Nodes) == 0 {
-		writeJSON(w, &model.SimResult{Error: "管网为空：请先添加节点"})
+		writeJSON(w, &model.SimResult{Error: model.NewMsg(model.ErrEmptyNet)})
 		return
 	}
 	writeJSON(w, RunSimulationReport(&net))
@@ -120,12 +120,12 @@ func handleReport(w http.ResponseWriter, r *http.Request) {
 
 func handleImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		http.Error(w, model.ErrPostRequired, http.StatusMethodNotAllowed)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
 	if err != nil {
-		http.Error(w, "读取失败", http.StatusBadRequest)
+		http.Error(w, model.ErrReadBody, http.StatusBadRequest)
 		return
 	}
 	net := model.ParseINP(string(body))
@@ -134,12 +134,12 @@ func handleImport(w http.ResponseWriter, r *http.Request) {
 
 func handleExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		http.Error(w, model.ErrPostRequired, http.StatusMethodNotAllowed)
 		return
 	}
 	var net model.Network
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&net); err != nil {
-		http.Error(w, "JSON 解析失败: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, model.ErrBadJSON, http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -150,6 +150,6 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 func recoverTo(w http.ResponseWriter) {
 	if rec := recover(); rec != nil {
 		log.Printf("handler panic: %v", rec)
-		writeJSON(w, &model.SimResult{Error: "服务器内部错误"})
+		writeJSON(w, &model.SimResult{Error: model.NewMsg(model.ErrInternal)})
 	}
 }

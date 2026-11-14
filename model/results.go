@@ -3,8 +3,8 @@ package model
 // SimResult is the full simulation output returned to the browser.
 type SimResult struct {
 	OK         bool         `json:"ok"`
-	Error      string       `json:"error,omitempty"`
-	Warnings   []string     `json:"warnings,omitempty"`
+	Error      *Msg         `json:"error,omitempty"`
+	Warnings   []*Msg       `json:"warnings,omitempty"`
 	Version    int          `json:"version"`
 	Units      UnitInfo     `json:"units"`
 	Times      []int64      `json:"times"`

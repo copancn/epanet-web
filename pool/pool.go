@@ -155,7 +155,7 @@ func (p *Pool) Submit(net *model.Network) *model.SimResult {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return &model.SimResult{Error: "模拟进程池已关闭"}
+		return &model.SimResult{Error: model.NewMsg(model.ErrPoolClosed)}
 	}
 	p.wg.Add(1)
 	p.mu.Unlock()
@@ -164,14 +164,14 @@ func (p *Pool) Submit(net *model.Network) *model.SimResult {
 	var w *worker
 	select {
 	case <-p.done:
-		return &model.SimResult{Error: "模拟进程池已关闭"}
+		return &model.SimResult{Error: model.NewMsg(model.ErrPoolClosed)}
 	case w = <-p.idle:
 	}
 
 	res := p.exchange(w, net)
 	if res == nil {
 		p.respawn()
-		return &model.SimResult{Error: "模拟工作进程异常退出，已自动重启，请重试"}
+		return &model.SimResult{Error: model.NewMsg(model.ErrWorkerRestarted)}
 	}
 	select {
 	case p.idle <- w:

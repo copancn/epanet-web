@@ -245,46 +245,47 @@ func (c *MSXConfig) ToMSX() string {
 }
 
 // Validate checks section-level integrity so a malformed config cannot produce
-// a broken .msx file. It returns the first problem found, or nil.
-func (c *MSXConfig) Validate() error {
+// a broken .msx file. It returns the first problem found as a localizable Msg,
+// or nil.
+func (c *MSXConfig) Validate() *Msg {
 	if len(c.Species) == 0 {
-		return fmt.Errorf("至少需要一个物种 (species)")
+		return NewMsg(MSXErrNoSpecies)
 	}
 	known := map[string]bool{}
 	for _, s := range c.Species {
 		if strings.TrimSpace(s.ID) == "" {
-			return fmt.Errorf("物种 ID 不能为空")
+			return NewMsg(MSXErrSpeciesIDEmpty)
 		}
 		if known[s.ID] {
-			return fmt.Errorf("物种 ID 重复: %s", s.ID)
+			return NewMsg(MSXErrSpeciesIDDup, s.ID)
 		}
 		known[s.ID] = true
 	}
 	refOK := func(sp string) bool { return known[sp] }
 	for _, r := range c.PipeRate {
 		if !refOK(r.Species) {
-			return fmt.Errorf("PIPE RATE 引用未知物种: %s", r.Species)
+			return NewMsg(MSXErrPipeRateSpecies, r.Species)
 		}
 		if strings.TrimSpace(r.Expr) == "" {
-			return fmt.Errorf("PIPE RATE %s 表达式为空", r.Species)
+			return NewMsg(MSXErrPipeRateEmpty, r.Species)
 		}
 	}
 	for _, r := range c.TankRate {
 		if !refOK(r.Species) {
-			return fmt.Errorf("TANK RATE 引用未知物种: %s", r.Species)
+			return NewMsg(MSXErrTankRateSpecies, r.Species)
 		}
 	}
 	for _, s := range c.Sources {
 		if !refOK(s.Species) {
-			return fmt.Errorf("SOURCES 引用未知物种: %s", s.Species)
+			return NewMsg(MSXErrSourceSpecies, s.Species)
 		}
 		if strings.TrimSpace(s.Node) == "" {
-			return fmt.Errorf("SOURCES 节点不能为空")
+			return NewMsg(MSXErrSourceNodeEmpty)
 		}
 	}
 	for _, q := range c.Quality {
 		if !refOK(q.Species) {
-			return fmt.Errorf("QUALITY 引用未知物种: %s", q.Species)
+			return NewMsg(MSXErrQualitySpecies, q.Species)
 		}
 	}
 	return nil

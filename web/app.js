@@ -87,9 +87,27 @@ async function api(path, method, body, reqText, respText) {
     opt.headers = { 'Content-Type': reqText ? 'text/plain' : 'application/json' };
   }
   const r = await fetch(path, opt);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
+  if (!r.ok) {
+    // The backend sends a status code as the error body; fall back to HTTP status.
+    let code = 'HTTP ' + r.status;
+    try { const txt = (await r.text()).trim(); if (txt) code = txt; } catch (e) {}
+    throw new Error(code);
+  }
   return respText ? r.text() : r.json();
 }
+
+// Localize a backend Msg {code, args, detail}; detail is raw technical text.
+function msgText(m) {
+  if (!m) return '';
+  if (typeof m === 'string') return t(m);
+  let s = t(m.code, ...(m.args || []));
+  if (m.detail) s += ' (' + m.detail + ')';
+  return s;
+}
+
+// Localize an error from api() (message is a status code) or a local error
+// (message shown as-is). t() falls back to the key when it is not a known code.
+function errText(e) { return t((e && e.message) || String(e)); }
 
 function toast(msg, kind) {
   const t = $('toast');
@@ -1735,7 +1753,7 @@ async function runSim() {
   const btn = $('btnRun'); btn.disabled = true; btn.textContent = t('btn.running');
   try {
     const res = await api('/api/simulate', 'POST', state.net);
-    if (!res.ok) { toast(res.error || t('err.simFailed'), 'err'); return; }
+    if (!res.ok) { toast(res.error ? msgText(res.error) : t('err.simFailed'), 'err'); return; }
     state.results = res; state.stale = false; state.timeIndex = 0;
     state.resNode = {}; state.resLink = {};
     res.nodes.forEach(n => state.resNode[n.id] = n);
@@ -1744,7 +1762,7 @@ async function runSim() {
     showResults();
     const w = res.warnings && res.warnings.length ? t('toast.warnCount', res.warnings.length) : '';
     toast(t('toast.simDone', res.times.length, w), 'ok');
-  } catch (e) { toast(t('err.request') + e.message, 'err'); }
+  } catch (e) { toast(t('err.request') + errText(e), 'err'); }
   finally { btn.disabled = false; updateRunButton(); }
 }
 
@@ -1832,7 +1850,7 @@ document.querySelectorAll('.rptab').forEach(b => b.addEventListener('click', () 
   $('leakWrap').hidden = tab !== 'leak';
   $('msxWrap').hidden = tab !== 'msx';
   $('warningsWrap').hidden = tab !== 'warnings';
-  if (tab === 'report') ensureReport().catch(e => toast(t('err.report') + e.message, 'err'));
+  if (tab === 'report') ensureReport().catch(e => toast(t('err.report') + errText(e), 'err'));
   if (tab === 'msx') renderMSX();
 }));
 $('btnToggleResults').addEventListener('click', () => $('resultsPanel').classList.toggle('collapsed'));
@@ -1893,7 +1911,7 @@ function renderTables() {
   $('linkTableWrap').innerHTML = hl;
   // warnings
   const ws = state.results.warnings || [];
-  $('warningsWrap').innerHTML = ws.length ? ws.map(w => `<div class="warn-item">⚠ ${esc(w)}</div>`).join('') : `<div class="warn-none">${esc(t('warn.none'))}</div>`;
+  $('warningsWrap').innerHTML = ws.length ? ws.map(w => `<div class="warn-item">⚠ ${esc(msgText(w))}</div>`).join('') : `<div class="warn-none">${esc(t('warn.none'))}</div>`;
   document.querySelector('.rptab[data-rptab=warnings]').textContent = ' ' + t('rptab.warningsCount', ws.length);
   // row click
   document.querySelectorAll('#rpBody tr[data-id]').forEach(tr => tr.addEventListener('click', () => {
@@ -1937,7 +1955,7 @@ async function ensureReport() {
     if (res.statistics) state.results.statistics = res.statistics;
     renderReport(); renderStats();
   } else if (res && res.error) {
-    toast(t('err.report') + res.error, 'err');
+    toast(t('err.report') + msgText(res.error), 'err');
   }
   return state.results.report || '';
 }
@@ -2137,7 +2155,7 @@ $('btnReport').addEventListener('click', async () => {
   try {
     const rpt = await ensureReport();
     if (rpt) { download(rpt, (state.net.title || 'network') + '.rpt', 'text/plain;charset=utf-8'); toast(t('toast.reportDone'), 'ok'); }
-  } catch (e) { toast(t('err.report') + e.message, 'err'); }
+  } catch (e) { toast(t('err.report') + errText(e), 'err'); }
 });
 $('btnChart').addEventListener('click', openChart);
 $('btnCloseChart').addEventListener('click', () => { $('chartModal').hidden = true; });
@@ -2146,8 +2164,8 @@ $('chartModal').addEventListener('click', e => { if (e.target === $('chartModal'
 
 /* ============================ file ops ============================ */
 async function loadExample() {
-  try { const net = await api('/api/example'); loadNetwork(net); fitView(); toast(t('toast.exampleLoaded'), 'ok'); }
-  catch (e) { toast(t('err.exampleLoad') + e.message, 'err'); }
+  try { const net = await api('/api/example'); net.title = t('example.title'); loadNetwork(net); fitView(); toast(t('toast.exampleLoaded'), 'ok'); }
+  catch (e) { toast(t('err.exampleLoad') + errText(e), 'err'); }
 }
 function loadNetwork(net) {
   // normalize
@@ -2174,7 +2192,7 @@ $('btnExport').addEventListener('click', async () => {
   try {
     const text = await api('/api/export', 'POST', state.net, false, true);
     download(text, (state.net.title || 'network') + '.inp', 'text/plain');
-  } catch (e) { toast(t('err.export') + e.message, 'err'); }
+  } catch (e) { toast(t('err.export') + errText(e), 'err'); }
 });
 $('btnSave').addEventListener('click', () => download(JSON.stringify(state.net, null, 2), (state.net.title || 'network') + '.json', 'application/json'));
 $('btnImport').addEventListener('click', () => $('fileInp').click());
@@ -2182,7 +2200,7 @@ $('btnOpen').addEventListener('click', () => $('fileJson').click());
 $('fileInp').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
   try { const text = await f.text(); const net = await api('/api/import', 'POST', text, true); loadNetwork(net); fitView(); toast(t('toast.imported') + f.name, 'ok'); }
-  catch (err) { toast(t('err.import') + err.message, 'err'); }
+  catch (err) { toast(t('err.import') + errText(err), 'err'); }
   e.target.value = '';
 });
 $('fileJson').addEventListener('change', async e => {

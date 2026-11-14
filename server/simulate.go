@@ -28,13 +28,13 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 
 	res := &model.SimResult{}
 	if !epanet.Ready() {
-		res.Error = "EPANET 动态库未加载"
+		res.Error = model.NewMsg(model.ErrEngineNotLoaded)
 		return res
 	}
 
 	dir, err := os.MkdirTemp("", "epanetsim")
 	if err != nil {
-		res.Error = "创建临时目录失败: " + err.Error()
+		res.Error = model.ErrMsg(model.ErrTempDir, err)
 		return res
 	}
 	defer os.RemoveAll(dir)
@@ -42,7 +42,7 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 	inpPath := filepath.Join(dir, "net.inp")
 	rptPath := filepath.Join(dir, "net.rpt")
 	if err := os.WriteFile(inpPath, []byte(net.ToINP()), 0o644); err != nil {
-		res.Error = "写入 INP 失败: " + err.Error()
+		res.Error = model.ErrMsg(model.ErrWriteInp, err)
 		return res
 	}
 
@@ -52,17 +52,17 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 	msxPath := filepath.Join(dir, "net.msx")
 	hydPath := filepath.Join(dir, "net.hyd")
 	if msxOn {
-		if err := net.MSX.Validate(); err != nil {
-			res.Warnings = append(res.Warnings, "MSX: "+err.Error())
+		if vmsg := net.MSX.Validate(); vmsg != nil {
+			res.Warnings = append(res.Warnings, vmsg)
 			msxOn = false
 		} else if err := os.WriteFile(msxPath, []byte(net.ToMSX()), 0o644); err != nil {
-			res.Warnings = append(res.Warnings, "MSX: 写入 .msx 失败: "+err.Error())
+			res.Warnings = append(res.Warnings, model.ErrMsg(model.WarnMSXWrite, err))
 			msxOn = false
 		}
 	}
 
 	if err := epanet.Open(inpPath, rptPath, ""); err != nil {
-		res.Error = "打开管网失败: " + err.Error()
+		res.Error = model.ErrMsg(model.ErrOpenNet, err)
 		return res
 	}
 	defer epanet.Close()
@@ -75,23 +75,23 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 
 	nodes, links, err := inventory()
 	if err != nil {
-		res.Error = "读取管网结构失败: " + err.Error()
+		res.Error = model.ErrMsg(model.ErrInventory, err)
 		return res
 	}
 
 	warn, err := epanet.SolveH()
 	if err != nil {
-		res.Error = "水力求解失败: " + err.Error()
+		res.Error = model.ErrMsg(model.ErrSolveH, err)
 		return res
 	}
 	if warn != "" {
-		res.Warnings = append(res.Warnings, "水力: "+warn)
+		res.Warnings = append(res.Warnings, model.NewMsg(model.WarnHydraulic).WithDetail(warn))
 	}
 
 	// File-couple the solved hydraulics to MSX via an explicit .hyd file.
 	if msxOn {
 		if err := epanet.SaveHydFile(hydPath); err != nil {
-			res.Warnings = append(res.Warnings, "MSX: 保存水力文件失败: "+err.Error())
+			res.Warnings = append(res.Warnings, model.ErrMsg(model.WarnMSXSaveHyd, err))
 			msxOn = false
 		}
 	}
@@ -101,10 +101,10 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 	// (it saves output too); otherwise transfer the hydraulic results.
 	if withReport && qualityOn {
 		if _, qerr := epanet.SolveQ(); qerr != nil {
-			res.Warnings = append(res.Warnings, "水质: "+qerr.Error())
+			res.Warnings = append(res.Warnings, model.ErrMsg(model.WarnQuality, qerr))
 		}
 	} else if err := epanet.SaveH(); err != nil {
-		res.Error = "保存水力结果失败: " + err.Error()
+		res.Error = model.ErrMsg(model.ErrSaveH, err)
 		return res
 	}
 
@@ -112,7 +112,7 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 	// and clears SaveQflag.
 	if withReport {
 		if err := epanet.Report(); err != nil {
-			res.Warnings = append(res.Warnings, "报告: "+err.Error())
+			res.Warnings = append(res.Warnings, model.ErrMsg(model.WarnReport, err))
 		} else if data, rerr := os.ReadFile(rptPath); rerr == nil {
 			res.Report = string(data)
 		}
@@ -120,11 +120,11 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 
 	qwarn, err := readSeries(nodes, links, &res.Times, qualityOn)
 	if err != nil {
-		res.Error = "读取时序失败: " + err.Error()
+		res.Error = model.ErrMsg(model.ErrReadSeries, err)
 		return res
 	}
-	if qwarn != "" {
-		res.Warnings = append(res.Warnings, "水质: "+qwarn)
+	if qwarn != nil {
+		res.Warnings = append(res.Warnings, qwarn)
 	}
 
 	res.Statistics = readStatistics()
@@ -132,8 +132,8 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 	// Multi-species analysis runs last, file-coupled to the saved hydraulics.
 	// Best-effort: any failure degrades to a warning, never aborting hydraulics.
 	if msxOn {
-		if mres, mwarn := runMSX(msxPath, hydPath, nodes, links); mwarn != "" {
-			res.Warnings = append(res.Warnings, "MSX: "+mwarn)
+		if mres, mwarn := runMSX(msxPath, hydPath, nodes, links); mwarn != nil {
+			res.Warnings = append(res.Warnings, mwarn)
 		} else {
 			res.MSX = mres
 		}
@@ -148,17 +148,17 @@ func runSim(net *model.Network, withReport bool) *model.SimResult {
 // runMSX executes the multi-species analysis by file-coupling the saved EPANET
 // hydraulics (.hyd) with the generated .msx chemistry. EPANET must still be open
 // and the caller must hold epanet.Lock() (MSX shares EPANET's global state).
-// Returns a warning string on any failure; the result is nil in that case.
-func runMSX(msxPath, hydPath string, nodes []model.NodeSeries, links []model.LinkSeries) (*model.MSXResult, string) {
+// Returns a warning Msg on any failure; the result is nil in that case.
+func runMSX(msxPath, hydPath string, nodes []model.NodeSeries, links []model.LinkSeries) (*model.MSXResult, *model.Msg) {
 	if !msx.Ready() {
-		return nil, "EPANET-MSX 动态库未加载"
+		return nil, model.NewMsg(model.WarnMSXNotLoaded)
 	}
 	if err := msx.Open(msxPath); err != nil {
-		return nil, "打开 .msx 失败: " + err.Error()
+		return nil, model.ErrMsg(model.WarnMSXOpen, err)
 	}
 	defer msx.Close()
 	if err := msx.UseHydFile(hydPath); err != nil {
-		return nil, "注册水力文件失败: " + err.Error()
+		return nil, model.ErrMsg(model.WarnMSXUseHyd, err)
 	}
 	return readMSXSeries(nodes, links)
 }
@@ -167,20 +167,20 @@ func runMSX(msxPath, hydPath string, nodes []model.NodeSeries, links []model.Lin
 // every species at every node/link. MSXinit sets t=0 to the initial [QUALITY]
 // values; each MSXstep advances and returns the new time, so the initial state
 // is sampled before the first step and the loop ends when no time remains.
-func readMSXSeries(nodes []model.NodeSeries, links []model.LinkSeries) (*model.MSXResult, string) {
+func readMSXSeries(nodes []model.NodeSeries, links []model.LinkSeries) (*model.MSXResult, *model.Msg) {
 	nspec, err := msx.SpeciesCount()
 	if err != nil {
-		return nil, "读取物种数失败: " + err.Error()
+		return nil, model.ErrMsg(model.WarnMSXSpeciesCnt, err)
 	}
 	if nspec == 0 {
-		return nil, "未定义物种"
+		return nil, model.NewMsg(model.WarnMSXNoSpecies)
 	}
 	meta := make([]model.MSXSpeciesMeta, nspec)
 	for s := 1; s <= nspec; s++ {
 		id, _ := msx.ID(msx.Species, s)
 		info, err := msx.SpeciesAt(s)
 		if err != nil {
-			return nil, "读取物种属性失败: " + err.Error()
+			return nil, model.ErrMsg(model.WarnMSXSpeciesAttr, err)
 		}
 		typ := "BULK"
 		if info.Type == msx.Wall {
@@ -200,7 +200,7 @@ func readMSXSeries(nodes []model.NodeSeries, links []model.LinkSeries) (*model.M
 	out := &model.MSXResult{Species: meta, Nodes: mn, Links: ml}
 
 	if err := msx.InitQual(0); err != nil {
-		return nil, "初始化水质失败: " + err.Error()
+		return nil, model.ErrMsg(model.WarnMSXInit, err)
 	}
 	sample := func(t int64) {
 		out.Times = append(out.Times, t)
@@ -219,14 +219,14 @@ func readMSXSeries(nodes []model.NodeSeries, links []model.LinkSeries) (*model.M
 	for {
 		t, tleft, err := msx.Step()
 		if err != nil {
-			return nil, "水质步进失败: " + err.Error()
+			return nil, model.ErrMsg(model.WarnMSXStep, err)
 		}
 		sample(t)
 		if tleft <= 0 {
 			break
 		}
 	}
-	return out, ""
+	return out, nil
 }
 
 // readStatistics collects engine analysis statistics; nil if unavailable.
@@ -308,22 +308,25 @@ func inventory() ([]model.NodeSeries, []model.LinkSeries, error) {
 // water-quality loop in lockstep. ENnextH and ENnextQ both advance to the next
 // hydraulic event, so the two solvers share the same timeline. Quality is
 // best-effort: a failure degrades to a warning without aborting hydraulics.
-func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int64, qualityOn bool) (string, error) {
+func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int64, qualityOn bool) (*model.Msg, error) {
 	if err := epanet.OpenH(); err != nil {
-		return "", err
+		return nil, err
 	}
 	defer epanet.CloseH()
 	if err := epanet.InitH(epanet.NoSave); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	qActive := false
-	qWarn := ""
+	var qWarn *model.Msg
+	qwarn := func(step string, err error) *model.Msg {
+		return model.NewMsg(model.WarnQuality).WithDetail(step + ": " + err.Error())
+	}
 	if qualityOn {
 		if err := epanet.OpenQ(); err != nil {
-			qWarn = "openQ: " + err.Error()
+			qWarn = qwarn("openQ", err)
 		} else if err := epanet.InitQ(epanet.NoSave); err != nil {
-			qWarn = "initQ: " + err.Error()
+			qWarn = qwarn("initQ", err)
 			epanet.CloseQ()
 		} else {
 			qActive = true
@@ -410,7 +413,7 @@ func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int
 		}
 		if qActive {
 			if _, err := epanet.RunQ(); err != nil {
-				qWarn = "runQ: " + err.Error()
+				qWarn = qwarn("runQ", err)
 				qActive = false
 			} else {
 				for i := range nodes {
@@ -422,7 +425,7 @@ func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int
 					links[i].Quality = append(links[i].Quality, q)
 				}
 				if _, err := epanet.NextQ(); err != nil {
-					qWarn = "nextQ: " + err.Error()
+					qWarn = qwarn("nextQ", err)
 					qActive = false
 				}
 			}

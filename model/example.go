@@ -4,7 +4,7 @@ package model
 // a storage tank and diurnal demands — a good starting point for the editor.
 func Example() *Network {
 	n := &Network{
-		Title:   "示例管网 · 水库+水泵+水池+环状需水",
+		Title:   ExampleTitle,
 		Options: DefaultOptions(),
 		Times:   DefaultTimes(),
 		Quality: Quality{Type: "NONE"},
