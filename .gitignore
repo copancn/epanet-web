@@ -16,3 +16,7 @@ reimport.json
 # Vendored third-party reference source (EPANET engine, MIT) — kept locally for
 # API/semantics lookup, not part of our build or commits.
 reference/
+
+# Generated self-signed HTTPS material (the private key must never be committed)
+epanet-web-tls.crt
+epanet-web-tls.key

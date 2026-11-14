@@ -55,7 +55,7 @@ go build -o epanet-web.exe .
 ./epanet-web.exe
 ```
 
-启动后浏览器打开 <http://127.0.0.1:8770> 即可。也可以直接 `go run .`。
+启动后浏览器打开 <http://127.0.0.1:8770>（HTTP）或 <https://127.0.0.1:8771>（HTTPS）即可，两者同时提供服务。也可以直接 `go run .`。
 
 首次进入会自动加载示例管网（水库 + 水泵 + 水池 + 环状需水），点击「运行」即可看到模拟结果。
 
@@ -64,12 +64,25 @@ go build -o epanet-web.exe .
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `-addr` | `127.0.0.1:8770` | HTTP 监听地址 |
+| `-tls-addr` | `127.0.0.1:8771` | HTTPS 监听地址（置空 `""` 则禁用 HTTPS） |
+| `-tls-cert` | 自动生成 | HTTPS 证书 PEM 路径（须与 `-tls-key` 同时指定） |
+| `-tls-key` | 自动生成 | HTTPS 私钥 PEM 路径 |
 | `-dll` | 自动查找 | `epanet2.dll` 路径 |
 | `-msxdll` | 自动查找 | `epanetmsx.dll` 路径（多组分水质；缺失则禁用） |
 | `-workers` | `min(CPU 核数, 8)` | 模拟工作进程数（并发模拟路数） |
 | `-worker` | `false` | 内部使用：以模拟工作子进程模式运行 |
 
 DLL 查找顺序：`-dll` 指定路径 → 可执行文件同目录 → 当前工作目录 → 已知 SDK 位置。`epanetmsx.dll` 同理（`-msxdll`）；缺失时多组分水质自动禁用，EPANET 仍可运行。
+
+**HTTPS**：HTTP 与 HTTPS 双监听、互不跳转，共用同一套界面与 API。未指定 `-tls-cert`/`-tls-key` 时自动签发并缓存自签名证书（`epanet-web-tls.crt` / `.key`，位于工作目录，已加入 `.gitignore`），SAN 覆盖 `localhost`、本机主机名与全部网卡 IP，因此局域网访问不会出现名称不匹配。证书有效期 825 天，到期前 30 天或本机地址变化时自动重签。
+
+自签名证书不被浏览器信任：首次访问点击「高级 → 继续前往」，或把 `epanet-web-tls.crt` 导入系统「受信任的根证书颁发机构」即可消除警告。对外发布请改用正式证书：
+
+```bash
+./epanet-web.exe -addr 0.0.0.0:8770 -tls-addr 0.0.0.0:8771 -tls-cert fullchain.pem -tls-key privkey.pem
+```
+
+HTTPS 启用失败（证书无效、端口被占用等）只记录警告并跳过，HTTP 服务照常运行。
 
 ### 使用指南
 
@@ -98,7 +111,8 @@ DLL 查找顺序：`-dll` 指定路径 → 可执行文件同目录 → 当前�
 
 ```
 epanet-web/
-├── main.go            # 入口：命令行参数、嵌入 web、DLL/MSX 解析、进程池、优雅关闭
+├── main.go            # 入口：命令行参数、嵌入 web、DLL/MSX 解析、进程池、HTTP/HTTPS 双监听、优雅关闭
+├── tlscert.go         # 自签名证书签发与缓存（纯标准库），支持正式 PEM 证书
 ├── epanet/            # 纯 Go syscall 绑定 EPANET 2.x DLL（无 cgo）
 ├── msx/               # 纯 Go syscall 绑定 EPANET-MSX DLL（只读，多组分水质）
 ├── model/             # 管网数据模型、INP 解析/生成、MSX 配置/预置、示例管网、结果类型
@@ -175,7 +189,7 @@ go build -o epanet-web.exe .
 ./epanet-web.exe
 ```
 
-Then open <http://127.0.0.1:8770> in your browser. `go run .` also works.
+Then open <http://127.0.0.1:8770> (HTTP) or <https://127.0.0.1:8771> (HTTPS) in your browser — both are served at the same time. `go run .` also works.
 
 On first load an example network (reservoir + pump + tank + looped demands) is loaded automatically — click **Run** to see simulation results.
 
@@ -184,12 +198,25 @@ On first load an example network (reservoir + pump + tank + looped demands) is l
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-addr` | `127.0.0.1:8770` | HTTP listen address |
+| `-tls-addr` | `127.0.0.1:8771` | HTTPS listen address (set to `""` to disable HTTPS) |
+| `-tls-cert` | auto-generated | Path to the HTTPS certificate PEM (must be paired with `-tls-key`) |
+| `-tls-key` | auto-generated | Path to the HTTPS private-key PEM |
 | `-dll` | auto-detected | Path to `epanet2.dll` |
 | `-msxdll` | auto-detected | Path to `epanetmsx.dll` (multi-species quality; disabled if absent) |
 | `-workers` | `min(CPU count, 8)` | Number of simulation worker processes (parallel runs) |
 | `-worker` | `false` | Internal: run as a simulation worker subprocess |
 
 DLL search order: `-dll` path → next to the executable → working directory → known SDK location. `epanetmsx.dll` follows the same order (`-msxdll`); when absent, multi-species quality is disabled automatically and EPANET still runs.
+
+**HTTPS**: HTTP and HTTPS listen simultaneously with no redirect, sharing the same UI and API. Without `-tls-cert`/`-tls-key` a self-signed certificate is issued and cached automatically (`epanet-web-tls.crt` / `.key` in the working directory, both gitignored). Its SANs cover `localhost`, the machine hostname and every interface IP, so LAN clients do not hit a name mismatch. Validity is 825 days; it is re-issued 30 days before expiry or when the machine's addresses change.
+
+Browsers do not trust a self-signed certificate: accept the "continue anyway" warning on first visit, or import `epanet-web-tls.crt` into the system's trusted root store to remove it. For public deployment supply a real certificate instead:
+
+```bash
+./epanet-web.exe -addr 0.0.0.0:8770 -tls-addr 0.0.0.0:8771 -tls-cert fullchain.pem -tls-key privkey.pem
+```
+
+If HTTPS cannot start (invalid certificate, port already in use, …) it logs a warning and is skipped; the HTTP service keeps running.
 
 ### Usage
 
@@ -218,7 +245,8 @@ Request body limit: 16 MB.
 
 ```
 epanet-web/
-├── main.go            # Entrypoint: flags, embedded web, DLL/MSX resolution, pool, graceful shutdown
+├── main.go            # Entrypoint: flags, embedded web, DLL/MSX resolution, pool, dual HTTP/HTTPS listeners, graceful shutdown
+├── tlscert.go         # Self-signed certificate issuance and caching (stdlib only), plus real PEM support
 ├── epanet/            # Pure-Go syscall binding to the EPANET 2.x DLL (no cgo)
 ├── msx/               # Pure-Go syscall binding to the EPANET-MSX DLL (read-only, multi-species)
 ├── model/             # Network model, INP parse/write, MSX config/preset, example network, result types

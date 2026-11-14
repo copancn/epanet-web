@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"embed"
 	"flag"
 	"fmt"
@@ -27,6 +28,9 @@ var webFS embed.FS
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8770", "HTTP 监听地址")
+	tlsAddr := flag.String("tls-addr", "127.0.0.1:8771", "HTTPS 监听地址（置空则禁用 HTTPS）")
+	tlsCert := flag.String("tls-cert", "", "HTTPS 证书 PEM 路径（与 -tls-key 同时指定；缺省则自动生成自签名证书）")
+	tlsKey := flag.String("tls-key", "", "HTTPS 私钥 PEM 路径")
 	dllFlag := flag.String("dll", "", "epanet2.dll 路径（默认自动查找）")
 	msxdllFlag := flag.String("msxdll", "", "epanetmsx.dll 路径（多物种水质，默认自动查找；缺失则禁用）")
 	workers := flag.Int("workers", defaultWorkers(), "模拟工作进程数（并发模拟路数）")
@@ -64,12 +68,41 @@ func main() {
 		log.Fatalf("启动模拟进程池失败: %v", err)
 	}
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(sub, p)}
+	handler := server.New(sub, p)
+	srv := &http.Server{Addr: *addr, Handler: handler}
+	servers := []*http.Server{srv}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP 服务失败: %v", err)
 		}
 	}()
+
+	// HTTPS is an auxiliary listener: a bad certificate or a busy port must not
+	// take down the HTTP service that is already running.
+	var tlsSrv *http.Server
+	var tlsDesc string
+	if *tlsAddr != "" {
+		cert, desc, err := setupTLS(*tlsCert, *tlsKey)
+		if err != nil {
+			log.Printf("HTTPS 未启用: %v", err)
+		} else {
+			tlsDesc = desc
+			tlsSrv = &http.Server{
+				Addr:    *tlsAddr,
+				Handler: handler,
+				TLSConfig: &tls.Config{
+					MinVersion:   tls.VersionTLS12,
+					Certificates: []tls.Certificate{cert},
+				},
+			}
+			servers = append(servers, tlsSrv)
+			go func() {
+				if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+					log.Printf("HTTPS 服务失败: %v", err)
+				}
+			}()
+		}
+	}
 
 	fmt.Printf("EPANET 引擎版本: %d\n", ver)
 	fmt.Printf("DLL: %s\n", dllPath)
@@ -80,6 +113,12 @@ func main() {
 	}
 	fmt.Printf("模拟工作进程: %d\n", *workers)
 	fmt.Printf("管网水力模拟服务已启动: http://%s\n", *addr)
+	if tlsSrv != nil {
+		fmt.Printf("HTTPS 服务已启动: https://%s（%s）\n", *tlsAddr, tlsDesc)
+		if *tlsCert == "" {
+			fmt.Println("自签名证书不受浏览器信任：首次访问选择「继续前往」，或将 .crt 导入系统受信任根证书。")
+		}
+	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
@@ -87,7 +126,9 @@ func main() {
 	fmt.Println("正在关闭…")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(ctx)
+	for _, s := range servers {
+		_ = s.Shutdown(ctx)
+	}
 	p.Close()
 }
 
