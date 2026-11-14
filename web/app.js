@@ -20,6 +20,8 @@ function emptyNetwork() {
 const state = {
   net: emptyNetwork(),
   tool: 'select',
+  component: null,      // armed palette component id (preset source)
+  paletteOpen: { node: false, link: false, valve: true },
   sel: null,            // {kind:'node'|'link', id}
   draft: null,          // {from, wx, wy}
   view: { scale: 1, panX: 0, panY: 0 },
@@ -324,7 +326,7 @@ function drawLink(l) {
   // pump / valve symbol at midpoint
   const mid = polyMid(pts);
   if (l.type === 'PUMP') drawPumpSymbol(mid, color);
-  else if (VALVE_TYPES.includes(l.type)) drawValveSymbol(mid, color);
+  else if (VALVE_TYPES.includes(l.type)) drawValveSymbol(mid, color, l.type);
 
   // label
   if (state.view.scale > 0.35) {
@@ -378,11 +380,24 @@ function drawPumpSymbol(m, color) {
   ctx.fillStyle = color; ctx.beginPath();
   ctx.moveTo(m[0] - 3, m[1] - 4); ctx.lineTo(m[0] + 5, m[1]); ctx.lineTo(m[0] - 3, m[1] + 4); ctx.closePath(); ctx.fill();
 }
-function drawValveSymbol(m, color) {
+function drawValveSymbol(m, color, type) {
+  const x = m[0], y = m[1];
   ctx.fillStyle = pal().symbolFill; ctx.strokeStyle = color; ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(m[0] - 6, m[1] - 5); ctx.lineTo(m[0] - 6, m[1] + 5); ctx.lineTo(m[0] + 6, m[1] - 5); ctx.lineTo(m[0] + 6, m[1] + 5); ctx.closePath();
+  ctx.moveTo(x - 6, y - 5); ctx.lineTo(x - 6, y + 5); ctx.lineTo(x + 6, y - 5); ctx.lineTo(x + 6, y + 5); ctx.closePath();
   ctx.fill(); ctx.stroke();
+  // per-subtype mark below the body (the id label sits above at y-8)
+  ctx.lineWidth = 1.5; ctx.strokeStyle = color; ctx.fillStyle = color;
+  ctx.beginPath();
+  if (type === 'PRV') { ctx.moveTo(x, y + 6); ctx.lineTo(x, y + 11); ctx.moveTo(x - 2, y + 9); ctx.lineTo(x, y + 11); ctx.lineTo(x + 2, y + 9); }
+  else if (type === 'PSV') { ctx.moveTo(x, y + 11); ctx.lineTo(x, y + 6); ctx.moveTo(x - 2, y + 8); ctx.lineTo(x, y + 6); ctx.lineTo(x + 2, y + 8); }
+  else if (type === 'PBV') { ctx.arc(x, y + 10, 3, Math.PI, 0); }
+  else if (type === 'FCV') { ctx.moveTo(x - 4, y + 9); ctx.lineTo(x + 4, y + 9); ctx.moveTo(x + 2, y + 7); ctx.lineTo(x + 4, y + 9); ctx.lineTo(x + 2, y + 11); }
+  else if (type === 'TCV') { ctx.moveTo(x - 3, y + 11); ctx.lineTo(x + 3, y + 7); }
+  else if (type === 'GPV') { ctx.moveTo(x - 4, y + 9); ctx.quadraticCurveTo(x - 2, y + 6, x, y + 9); ctx.quadraticCurveTo(x + 2, y + 12, x + 4, y + 9); }
+  else if (type === 'PCV') { ctx.moveTo(x, y + 6); ctx.lineTo(x, y + 11); }
+  ctx.stroke();
+  if (type === 'PCV') { ctx.beginPath(); ctx.arc(x, y + 8, 1.6, 0, 7); ctx.fill(); }
 }
 
 function drawNode(n) {
@@ -640,7 +655,8 @@ function tipContent(hit) {
 function handleLinkClick(nodeId) {
   if (!state.draft) { state.draft = { from: nodeId, wx: state.mouse.wx, wy: state.mouse.wy }; render(); return; }
   if (state.draft.from === nodeId) { state.draft = null; render(); return; }
-  const type = state.tool === 'pipe' ? 'PIPE' : state.tool === 'pump' ? 'PUMP' : 'PRV';
+  const comp = state.component ? COMPONENT_BY_ID[state.component] : null;
+  const type = state.tool === 'pipe' ? 'PIPE' : state.tool === 'pump' ? 'PUMP' : (comp ? comp.type : 'PRV');
   addLink(type, state.draft.from, nodeId);
   state.draft = null; render();
 }
@@ -664,6 +680,8 @@ function addNode(tool, wx, wy) {
   const prefix = type === 'JUNCTION' ? 'J' : type === 'RESERVOIR' ? 'R' : 'T';
   const n = { id: genId(prefix, state.net.nodes), type, x: Math.round(wx), y: Math.round(wy), elevation: 0, demand: 0, demandPattern: '', head: 50, headPattern: '', initLevel: 5, minLevel: 0, maxLevel: 10, diameter: 20, minVol: 0, volCurve: '', initQual: 0 };
   if (type === 'RESERVOIR') n.head = 50;
+  const comp = state.component ? COMPONENT_BY_ID[state.component] : null;
+  if (comp && comp.type === type) Object.assign(n, comp.preset);
   state.net.nodes.push(n);
   markDirty(true); select({ kind: 'node', id: n.id }); renderElemList(); render();
 }
@@ -673,6 +691,9 @@ function addLink(type, from, to) {
   const prefix = type === 'PIPE' ? 'P' : type === 'PUMP' ? 'PUMP' : 'V';
   const l = { id: genId(prefix, state.net.links), type, from, to, length: 300, diameter: 200, roughness: 100, minorLoss: 0, status: 'OPEN', power: 0, headCurve: '', speed: 1, speedPattern: '', setting: 20, vertices: [] };
   if (type === 'PUMP') { l.power = 0; l.headCurve = state.net.curves[0] ? state.net.curves[0].id : ''; }
+  const comp = state.component ? COMPONENT_BY_ID[state.component] : null;
+  if (comp && comp.type === type) Object.assign(l, comp.preset);
+  if (type === 'GPV' && !l.headCurve) l.headCurve = state.net.curves[0] ? state.net.curves[0].id : '';
   state.net.links.push(l);
   markDirty(true); select({ kind: 'link', id: l.id }); renderElemList(); render();
 }
@@ -752,15 +773,92 @@ function updateHistoryUI() {
   $('btnRedo').disabled = !histRedo.length;
 }
 
+/* ============================ component palette ============================ */
+// UX-layer presets: arm a draw tool + pre-fill EXISTING model fields with defaults.
+// No INP/EPANET format change; values round-trip through the unchanged writer/parser.
+function valveSvg(mark) {
+  return '<svg width="22" height="22" viewBox="0 0 22 22">'
+    + '<path d="M5 9 L5 15 L11 12 Z M17 9 L17 15 L11 12 Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>'
+    + mark + '</svg>';
+}
+const VMARK = 'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
+const COMP_ICONS = {
+  junction: '<svg width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="6" fill="currentColor"/></svg>',
+  reservoir: '<svg width="22" height="22" viewBox="0 0 22 22"><rect x="4" y="7" width="14" height="9" rx="1.5" fill="currentColor"/><path d="M6 10 q2.5 -2 5 0 t5 0" style="stroke:var(--panel)" fill="none" stroke-width="1.4"/></svg>',
+  tank: '<svg width="22" height="22" viewBox="0 0 22 22"><rect x="6" y="4" width="10" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="7.4" y="10" width="7.2" height="6.6" fill="currentColor"/></svg>',
+  pipe: '<svg width="22" height="22" viewBox="0 0 22 22"><path d="M3 11 h16" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>',
+  pump: '<svg width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="7" style="fill:var(--panel)" stroke="currentColor" stroke-width="2"/><path d="M8 7.5 L15 11 L8 14.5 Z" fill="currentColor"/></svg>',
+  prv: valveSvg('<path d="M11 2 L11 6 M9 4 L11 6 L13 4" ' + VMARK + '/>'),
+  psv: valveSvg('<path d="M11 6 L11 2 M9 4 L11 2 L13 4" ' + VMARK + '/>'),
+  pbv: valveSvg('<path d="M8 6 A3 3 0 0 1 14 6" ' + VMARK + '/>'),
+  fcv: valveSvg('<path d="M7 4 L15 4 M13 2 L15 4 L13 6" ' + VMARK + '/>'),
+  tcv: valveSvg('<path d="M8 6 L14 2" ' + VMARK + '/>'),
+  gpv: valveSvg('<path d="M7 5 Q9 1 11 5 T15 5" ' + VMARK + '/>'),
+  pcv: valveSvg('<path d="M11 2 L11 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="11" cy="3.5" r="1.7" fill="currentColor"/>'),
+};
+const COMPONENTS = [
+  { id: 'junction', sec: 'node', tool: 'junction', type: 'JUNCTION', ic: 'junction', name: 'comp.junction', spec: 'comp.junction.spec', preset: { demand: 8 } },
+  { id: 'reservoir', sec: 'node', tool: 'reservoir', type: 'RESERVOIR', ic: 'reservoir', name: 'comp.reservoir', spec: 'comp.reservoir.spec', preset: { head: 50 } },
+  { id: 'tank', sec: 'node', tool: 'tank', type: 'TANK', ic: 'tank', name: 'comp.tank', spec: 'comp.tank.spec', preset: { initLevel: 5, minLevel: 0, maxLevel: 10 } },
+  { id: 'pipe', sec: 'link', tool: 'pipe', type: 'PIPE', ic: 'pipe', name: 'comp.pipe', spec: 'comp.pipe.spec', preset: { diameter: 200, length: 300, roughness: 100 } },
+  { id: 'pump', sec: 'link', tool: 'pump', type: 'PUMP', ic: 'pump', name: 'comp.pump', spec: 'comp.pump.spec', preset: { power: 0 } },
+  { id: 'prv', sec: 'valve', tool: 'valve', type: 'PRV', ic: 'valve', name: 'valve.prv', spec: 'comp.prv.spec', preset: { setting: 40 } },
+  { id: 'psv', sec: 'valve', tool: 'valve', type: 'PSV', ic: 'valve', name: 'valve.psv', spec: 'comp.psv.spec', preset: { setting: 60 } },
+  { id: 'pbv', sec: 'valve', tool: 'valve', type: 'PBV', ic: 'valve', name: 'valve.pbv', spec: 'comp.pbv.spec', preset: { setting: 10 } },
+  { id: 'fcv', sec: 'valve', tool: 'valve', type: 'FCV', ic: 'valve', name: 'valve.fcv', spec: 'comp.fcv.spec', preset: { setting: 50 } },
+  { id: 'tcv', sec: 'valve', tool: 'valve', type: 'TCV', ic: 'valve', name: 'valve.tcv', spec: 'comp.tcv.spec', preset: { setting: 0.5 } },
+  { id: 'gpv', sec: 'valve', tool: 'valve', type: 'GPV', ic: 'valve', name: 'valve.gpv', spec: 'comp.gpv.spec', preset: {} },
+  { id: 'pcv', sec: 'valve', tool: 'valve', type: 'PCV', ic: 'valve', name: 'valve.pcv', spec: 'comp.pcv.spec', preset: { setting: 50 } },
+];
+const COMPONENT_BY_ID = Object.fromEntries(COMPONENTS.map(c => [c.id, c]));
+const DEFAULT_COMPONENT = { junction: 'junction', reservoir: 'reservoir', tank: 'tank', pipe: 'pipe', pump: 'pump', valve: 'prv' };
+const PALETTE_SECTIONS = [
+  { key: 'node', label: 'comp.sec.node' },
+  { key: 'link', label: 'comp.sec.link' },
+  { key: 'valve', label: 'comp.sec.valve' },
+];
+
+function renderPalette() {
+  const mount = $('paletteAcc'); if (!mount) return;
+  mount.innerHTML = '';
+  PALETTE_SECTIONS.forEach(s => {
+    const comps = COMPONENTS.filter(c => c.sec === s.key);
+    const open = !!state.paletteOpen[s.key];
+    const item = document.createElement('div'); item.className = 'acc-item' + (open ? ' open' : '');
+    const head = document.createElement('button'); head.type = 'button'; head.className = 'acc-head'; head.dataset.sec = s.key;
+    head.innerHTML = `<span class="acc-chev">▾</span><span>${esc(t(s.label))}</span><span class="acc-n">${comps.length}</span>`;
+    item.appendChild(head);
+    const body = document.createElement('div'); body.className = 'acc-body';
+    comps.forEach(c => {
+      const b = document.createElement('button'); b.type = 'button';
+      b.className = 'comp' + (state.component === c.id ? ' active' : '');
+      b.dataset.comp = c.id;
+      b.title = t(c.name) + ' · ' + t(c.spec);
+      b.innerHTML = `<span class="ic ic-${c.ic}">${COMP_ICONS[c.id]}</span><span class="tx"><span class="nm">${esc(t(c.name))}</span><span class="sp">${esc(t(c.spec))}</span></span>`;
+      body.appendChild(b);
+    });
+    item.appendChild(body);
+    mount.appendChild(item);
+  });
+}
+
 /* ============================ tools / tabs ============================ */
-function setTool(tool) {
+function setTool(tool, compId) {
   state.tool = tool; state.draft = null;
+  state.component = compId !== undefined ? compId : (DEFAULT_COMPONENT[tool] || null);
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));
-  const hints = { select: t('hint.select'), junction: t('hint.junction'), reservoir: t('hint.reservoir'), tank: t('hint.tank'), pipe: t('hint.pipe'), pump: t('hint.pump'), valve: t('hint.valve') };
-  $('canvasHint').textContent = hints[tool] || '';
+  document.querySelectorAll('.comp').forEach(b => b.classList.toggle('active', b.dataset.comp === state.component));
+  const comp = state.component ? COMPONENT_BY_ID[state.component] : null;
+  $('canvasHint').textContent = comp ? (t(comp.name) + ' · ' + t(comp.spec)) : (t('hint.' + tool) || '');
   render();
 }
-$('tools').addEventListener('click', e => { const b = e.target.closest('.tool'); if (b) setTool(b.dataset.tool); });
+$('palette').addEventListener('click', e => {
+  const head = e.target.closest('.acc-head');
+  if (head) { const k = head.dataset.sec; state.paletteOpen[k] = !state.paletteOpen[k]; renderPalette(); return; }
+  const comp = e.target.closest('.comp');
+  if (comp) { const c = COMPONENT_BY_ID[comp.dataset.comp]; if (c) setTool(c.tool, c.id); return; }
+  if (e.target.closest('.palette-select')) setTool('select');
+});
 
 document.querySelectorAll('.etab').forEach(b => b.addEventListener('click', () => {
   state.elemTab = b.dataset.etab;
@@ -2140,7 +2238,7 @@ function updateRunButton() {
 }
 function refreshLangUI() {
   updateEngineBadge(); updateRunButton(); updateThemeBtn();
-  setTool(state.tool); renderElemList(); buildPropsForm(); buildSettings();
+  setTool(state.tool, state.component); renderPalette(); renderElemList(); buildPropsForm(); buildSettings();
   if (state.wizard) renderWizard();
   if (!$('mapPanel').hidden) buildMapPanel();
   if (!$('reviewModal').hidden) { state.review = reviewNetwork(); renderReview(); }
@@ -2875,7 +2973,7 @@ function drawMsxChart() {
 }
 
 async function init() {
-  buildSettings(); renderElemList(); updateRunButton(); syncMapUI(); syncColorUI(); updateThemeBtn();
+  buildSettings(); renderPalette(); renderElemList(); updateRunButton(); syncMapUI(); syncColorUI(); updateThemeBtn();
   try {
     const h = await api('/api/health');
     state.engineVersion = h.version;

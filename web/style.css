@@ -161,7 +161,32 @@ select {
 }
 .count { font-family: var(--mono); font-weight: 500; color: var(--text-faint); }
 
-.tools { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 0 10px 8px; }
+/* ---------- component palette ---------- */
+.palette { padding: 0 10px 8px; }
+.palette-select { width: 100%; margin-bottom: 8px; }
+.palette .acc-item { margin-bottom: 6px; }
+.palette .acc-head { justify-content: flex-start; gap: 6px; padding: 8px 10px; }
+.palette .acc-n { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+.palette .acc-body { padding: 6px; }
+.comp {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 7px; margin-bottom: 5px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--panel); cursor: pointer; text-align: left; font: inherit; transition: all .12s;
+}
+.comp:last-child { margin-bottom: 0; }
+.comp:hover { border-color: var(--accent); }
+.comp.active { background: var(--accent-dim); border-color: var(--accent); }
+.comp .ic { flex: 0 0 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
+.comp .tx { min-width: 0; }
+.comp .nm { font-size: 12px; font-weight: 600; display: block; color: var(--text); }
+.comp .sp { font-family: var(--mono); font-size: 10px; color: var(--text-dim); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.comp.active .nm { color: var(--accent); }
+.ic-junction { color: var(--junction); }
+.ic-reservoir { color: var(--reservoir); }
+.ic-tank { color: var(--tank); }
+.ic-pipe { color: var(--pipe); }
+.ic-pump { color: var(--pump); }
+.ic-valve { color: var(--valve); }
 .tool {
   font: inherit; font-size: 12px; padding: 8px 6px;
   border: 1px solid var(--border); border-radius: 6px;
@@ -206,6 +231,7 @@ select {
   position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
   font-size: 11px; color: var(--text-faint); background: var(--overlay);
   padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border); pointer-events: none;
+  max-width: 92%; text-align: center;
 }
 .zoom-ctl { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 5px; }
 .zoom-ctl .btn { box-shadow: var(--shadow); }

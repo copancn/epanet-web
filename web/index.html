@@ -89,15 +89,10 @@
 
 <main class="workspace">
   <aside class="left">
-    <div class="panel-title" data-i18n="tools.title">绘图工具</div>
-    <div class="tools" id="tools">
-      <button class="tool active" data-tool="select" data-i18n="tool.select" data-i18n-title="tool.select.title" title="选择/移动 (V)">⬚ 选择</button>
-      <button class="tool" data-tool="junction" data-i18n="tool.junction" data-i18n-title="tool.junction.title" title="节点 (J)">● 节点</button>
-      <button class="tool" data-tool="reservoir" data-i18n="tool.reservoir" data-i18n-title="tool.reservoir.title" title="水库 (R)">▰ 水库</button>
-      <button class="tool" data-tool="tank" data-i18n="tool.tank" data-i18n-title="tool.tank.title" title="水池 (T)">▮ 水池</button>
-      <button class="tool" data-tool="pipe" data-i18n="tool.pipe" data-i18n-title="tool.pipe.title" title="管道 (P)">─ 管道</button>
-      <button class="tool" data-tool="pump" data-i18n="tool.pump" data-i18n-title="tool.pump.title" title="水泵 (M)">⊕ 水泵</button>
-      <button class="tool" data-tool="valve" data-i18n="tool.valve" data-i18n-title="tool.valve.title" title="阀门 (A)">⋈ 阀门</button>
+    <div class="panel-title" data-i18n="palette.title">组件库</div>
+    <div class="palette" id="palette">
+      <button class="tool palette-select active" id="paletteSelect" data-tool="select" data-i18n="tool.select" data-i18n-title="tool.select.title" title="选择/移动 (V)">⬚ 选择</button>
+      <div id="paletteAcc"></div>
     </div>
     <div class="panel-title" data-i18n="legend.title">图例</div>
     <div class="type-legend">
