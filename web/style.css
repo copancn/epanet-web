@@ -376,6 +376,24 @@ input[type=time] { font: inherit; font-size: 12px; padding: 5px 8px; border: 1px
 .stat-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
 .stat-card .sk { font-size: 11px; color: var(--text-dim); }
 .stat-card .sv { font-family: var(--mono); font-size: 16px; font-weight: 700; margin-top: 2px; }
+.stat-card .sv.leak-ok { color: var(--run); }
+.leak-note { padding: 0 10px 4px; }
+.leak-win { display: flex; gap: 14px; padding: 0 10px 6px; }
+.leak-win label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
+.leak-win input { font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text); }
+.leak-win input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+#leakWrap .prop-section-title { padding: 0 10px; }
+#leakWrap table { margin-top: 4px; }
+.mat-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
+.mat-label { font-size: 11px; color: var(--text-dim); }
+.mat-chip.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.prv-modal { width: 460px; }
+.prv-table { margin: 4px 0 8px; }
+.prv-table th { text-align: left; }
+.prv-table td { padding: 3px 6px 3px 0; }
+.prv-table input { width: 100%; font: inherit; font-size: 12px; padding: 5px 7px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text); }
+.prv-table input[type=number] { font-family: var(--mono); }
+.prv-table input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 .report-text { margin: 0; padding: 12px; font-family: var(--mono); font-size: 11px; line-height: 1.45; white-space: pre; overflow: auto; height: 100%; color: var(--text); }
 
 /* ---------- toast ---------- */

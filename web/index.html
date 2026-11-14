@@ -33,6 +33,7 @@
     <button class="btn" id="btnGis" data-i18n="btn.gis">导入 GIS</button>
     <button class="btn" id="btnExport" data-i18n="btn.export">导出 INP</button>
     <button class="btn" id="btnData" data-i18n="btn.data">模式/曲线/控制</button>
+    <button class="btn" id="btnPrv" data-i18n="btn.prv">调压向导</button>
     <button class="btn" id="btnReview" data-i18n="btn.review">检查</button>
     <button class="btn btn-run" id="btnRun">▶ 运行模拟</button>
   </div>
@@ -154,6 +155,7 @@
       <button class="rptab active" data-rptab="nodes" data-i18n="rptab.nodes">节点结果</button>
       <button class="rptab" data-rptab="links" data-i18n="rptab.links">管段结果</button>
       <button class="rptab" data-rptab="stats" data-i18n="rptab.stats">统计</button>
+      <button class="rptab" data-rptab="leak" data-i18n="rptab.leak">漏损分析</button>
       <button class="rptab" data-rptab="report" data-i18n="rptab.report">报告</button>
       <button class="rptab" data-rptab="warnings" data-i18n="rptab.warnings">警告</button>
     </div>
@@ -165,6 +167,7 @@
     <div class="table-wrap" id="nodeTableWrap"></div>
     <div class="table-wrap" id="linkTableWrap" hidden></div>
     <div class="table-wrap" id="statsWrap" hidden></div>
+    <div class="table-wrap" id="leakWrap" hidden></div>
     <div class="table-wrap" id="reportWrap" hidden></div>
     <div class="warnings-wrap" id="warningsWrap" hidden></div>
   </div>
@@ -255,6 +258,21 @@
   </div>
 </div>
 <div class="toast" id="toast" hidden></div>
+
+<!-- PRV time-modulation wizard -->
+<div class="modal-overlay" id="prvModal" hidden>
+  <div class="modal prv-modal">
+    <div class="modal-head">
+      <span data-i18n="prv.title">分时调压向导</span>
+      <button class="btn btn-icon" id="btnClosePrv">✕</button>
+    </div>
+    <div class="modal-body" id="prvBody"></div>
+    <div class="modal-foot">
+      <button class="btn" id="btnPrvCancel" data-i18n="btn.close">关闭</button>
+      <button class="btn btn-run" id="btnPrvGen" data-i18n="prv.generate">生成控制</button>
+    </div>
+  </div>
+</div>
 
 <script src="i18n.js"></script>
 <script src="app.js"></script>

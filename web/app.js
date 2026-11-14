@@ -39,6 +39,7 @@ const state = {
   theme: 'light',
   settingsOpen: 'analysis',
   wizard: null,
+  leakWindow: { start: '02:00', end: '04:00' },
 };
 
 const VALVE_TYPES = ['PRV', 'PSV', 'PBV', 'FCV', 'TCV', 'GPV', 'PCV'];
@@ -939,6 +940,14 @@ function buildPropsForm() {
       rlk.appendChild(field(t('prop.leakArea'), numInput(obj.leakArea, v => { obj.leakArea = v; markDirty(false); })));
       rlk.appendChild(field(t('prop.leakExpan'), numInput(obj.leakExpan, v => { obj.leakExpan = v; markDirty(false); }, '0.05')));
       form.appendChild(rlk);
+      const mats = document.createElement('div'); mats.className = 'mat-chips';
+      const ml = document.createElement('span'); ml.className = 'mat-label'; ml.textContent = t('mat.label'); mats.appendChild(ml);
+      [['mat.grayIron', 0.5], ['mat.ductileIron', 0.8], ['mat.pe', 1.2]].forEach(([k, ex]) => {
+        const b = btnSm(t(k) + ' ' + ex, () => { obj.leakExpan = ex; markDirty(false); buildPropsForm(); });
+        b.className = 'btn btn-sm mat-chip' + (Math.abs((obj.leakExpan || 0) - ex) < 1e-9 ? ' active' : '');
+        mats.appendChild(b);
+      });
+      form.appendChild(mats);
     } else if (obj.type === 'PUMP') {
       form.appendChild(field(t('prop.headCurve'), selectInput(obj.headCurve, curveOptions(), v => { obj.headCurve = v; markDirty(false); })));
       form.appendChild(field(t('prop.power'), numInput(obj.power, v => { obj.power = v; markDirty(false); })));
@@ -1518,7 +1527,7 @@ function addDataItem(cat) {
   dataSel[cat] = dataRows[cat].length - 1;
   renderDataTabs(); renderDataTree(); renderDataDetail();
 }
-function openData() {
+function openData(tab) {
   $('dataModal').hidden = false;
   dataEditors.length = 0;
   dataRows = { patterns: [], curves: [], controls: [], rules: [] };
@@ -1527,7 +1536,7 @@ function openData() {
   state.net.controls.forEach(line => dataRows.controls.push(controlRow(parseControl(line))));
   (state.net.rules || []).forEach(r => dataRows.rules.push(ruleRow(r)));
   DATA_CATS.forEach(c => dataRows[c.key].forEach(row => wireDataRow(row, c.key)));
-  dataTab = 'patterns';
+  dataTab = typeof tab === 'string' ? tab : 'patterns';
   dataSel = { patterns: 0, curves: 0, controls: 0, rules: 0 };
   renderDataTabs(); renderDataTree(); renderDataDetail();
   redrawEditors();
@@ -1546,9 +1555,78 @@ function applyData() {
 }
 $('dataDetail').addEventListener('input', () => { if (dataRows) renderDataTree(); });
 $('dataDetail').addEventListener('change', () => { if (dataRows) renderDataTree(); });
-$('btnData').addEventListener('click', openData);
+$('btnData').addEventListener('click', () => openData());
 $('btnCloseData').addEventListener('click', () => { $('dataModal').hidden = true; });
 $('btnApplyData').addEventListener('click', applyData);
+
+/* ============================ PRV time-modulation wizard ============================ */
+const PRV_VALVES = ['PRV', 'PSV', 'PBV', 'FCV', 'TCV'];
+let prvState = null;
+function prvValves() { return state.net.links.filter(l => PRV_VALVES.includes(l.type)); }
+function openPrvWizard() {
+  const valves = prvValves();
+  if (!valves.length) { toast(t('prv.noValve'), 'err'); return; }
+  const def = valves.find(v => v.type === 'PRV') || valves[0];
+  prvState = {
+    link: def.id,
+    rows: [
+      { clock: '02:00', value: 18 }, { clock: '06:00', value: 32 },
+      { clock: '12:00', value: 28 }, { clock: '18:00', value: 38 }, { clock: '22:00', value: 22 }
+    ]
+  };
+  $('prvModal').hidden = false;
+  renderPrvBody();
+}
+function prvUnitHint() {
+  const lk = state.net.links.find(l => l.id === prvState.link);
+  const ty = lk ? lk.type : 'PRV';
+  if (ty === 'FCV') return t('prv.unitFlow');
+  if (ty === 'TCV') return t('prv.unitLoss');
+  const pu = state.results && state.results.units ? state.results.units.pressure : '';
+  return t('prv.unitPressure') + (pu ? ' (' + pu + ')' : '');
+}
+function renderPrvBody() {
+  const body = $('prvBody'); body.innerHTML = '';
+  const valves = prvValves();
+  body.appendChild(field(t('prv.valve'), selectInput(prvState.link, valves.map(v => [v.id, v.id + ' · ' + v.type]), v => { prvState.link = v; renderPrvBody(); })));
+  const hint = document.createElement('div'); hint.className = 'ed-hint'; hint.textContent = prvUnitHint(); body.appendChild(hint);
+  body.appendChild(sectionTitle(t('prv.profile')));
+  const tbl = document.createElement('table'); tbl.className = 'prv-table';
+  tbl.innerHTML = `<thead><tr><th>${esc(t('prv.clock'))}</th><th>${esc(t('prv.setting'))}</th><th></th></tr></thead>`;
+  const tb = document.createElement('tbody');
+  prvState.rows.forEach((row, i) => {
+    const tr = document.createElement('tr');
+    const td1 = document.createElement('td');
+    const ti = document.createElement('input'); ti.type = 'time'; ti.value = row.clock;
+    ti.addEventListener('change', () => { row.clock = ti.value || '00:00'; });
+    td1.appendChild(ti);
+    const td2 = document.createElement('td');
+    td2.appendChild(numInput(row.value, v => { row.value = v; }, '0.5'));
+    const td3 = document.createElement('td');
+    td3.appendChild(btnSm('✕', () => { prvState.rows.splice(i, 1); renderPrvBody(); }));
+    tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3); tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); body.appendChild(tbl);
+  body.appendChild(btnSm(t('prv.addRow'), () => { prvState.rows.push({ clock: '00:00', value: 20 }); renderPrvBody(); }));
+  const note = document.createElement('div'); note.className = 'ed-hint'; note.textContent = t('prv.note'); body.appendChild(note);
+}
+function genPrvControls() {
+  if (!prvState) return;
+  const rows = prvState.rows.filter(r => r.clock).slice().sort((a, b) => clockToSec(a.clock) - clockToSec(b.clock));
+  let added = 0;
+  rows.forEach(r => {
+    const s = controlString({ link: prvState.link, action: 'SET', setting: r.value, cond: 'TIME', clock: r.clock });
+    if (s && !state.net.controls.includes(s)) { state.net.controls.push(s); added++; }
+  });
+  $('prvModal').hidden = true; prvState = null;
+  markDirty(true);
+  openData('controls');
+  toast(t('prv.generated', added), 'ok');
+}
+$('btnPrv').addEventListener('click', openPrvWizard);
+$('btnClosePrv').addEventListener('click', () => { $('prvModal').hidden = true; prvState = null; });
+$('btnPrvCancel').addEventListener('click', () => { $('prvModal').hidden = true; prvState = null; });
+$('btnPrvGen').addEventListener('click', genPrvControls);
 
 /* ============================ simulation ============================ */
 async function runSim() {
@@ -1574,7 +1652,7 @@ function showResults() {
   const slider = $('timeSlider'); slider.max = state.results.times.length - 1; slider.value = 0;
   if (state.results.units.quality) { $('nodeColor').querySelector('option[value=quality]').disabled = false; }
   else { $('nodeColor').querySelector('option[value=quality]').disabled = true; if (state.nodeColor === 'quality') { state.nodeColor = 'pressure'; $('nodeColor').value = 'pressure'; } }
-  updateTimeUI(); renderTables(); renderStats(); renderReport(); syncColorUI(); renderLegend(); buildPropsForm(); resize();
+  updateTimeUI(); renderTables(); renderStats(); renderLeakage(); renderReport(); syncColorUI(); renderLegend(); buildPropsForm(); resize();
   $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
 }
 function clearResults() {
@@ -1647,6 +1725,7 @@ document.querySelectorAll('.rptab').forEach(b => b.addEventListener('click', () 
   const tab = b.dataset.rptab;
   $('nodeTableWrap').hidden = tab !== 'nodes'; $('linkTableWrap').hidden = tab !== 'links';
   $('statsWrap').hidden = tab !== 'stats'; $('reportWrap').hidden = tab !== 'report';
+  $('leakWrap').hidden = tab !== 'leak';
   $('warningsWrap').hidden = tab !== 'warnings';
   if (tab === 'report') ensureReport().catch(e => toast(t('err.report') + e.message, 'err'));
 }));
@@ -1755,6 +1834,113 @@ async function ensureReport() {
     toast(t('err.report') + res.error, 'err');
   }
   return state.results.report || '';
+}
+
+/* ============================ leakage analysis ============================ */
+const FLOW_TO_M3S = {
+  'ft³/s': 0.0283168466, 'gal/min': 6.30901964e-5, 'Mgal/day': 0.0438126364,
+  'Mgal/day(Imp)': 0.0526167824, 'acre-ft/day': 0.0142764102,
+  'L/s': 0.001, 'L/min': 1.66666667e-5, 'ML/day': 0.0115740741,
+  'm³/h': 2.77777778e-4, 'm³/day': 1.15740741e-5, 'm³/s': 1
+};
+function integrateVol(series) {
+  const r = state.results, ts = r.times, f = FLOW_TO_M3S[r.units.flow] || 0;
+  if (!series || ts.length < 2 || !f) return 0;
+  let v = 0;
+  for (let i = 1; i < ts.length; i++) v += (series[i - 1] + series[i]) / 2 * (ts[i] - ts[i - 1]);
+  return v * f;
+}
+function timeAvg(series) {
+  const ts = state.results.times;
+  if (!series || !series.length) return NaN;
+  const span = ts[ts.length - 1] - ts[0];
+  if (ts.length < 2 || span <= 0) return series[0];
+  let a = 0;
+  for (let i = 1; i < ts.length; i++) a += (series[i - 1] + series[i]) / 2 * (ts[i] - ts[i - 1]);
+  return a / span;
+}
+function supplySeries() {
+  const r = state.results, n = r.times.length, S = new Array(n).fill(0);
+  r.nodes.forEach(nd => {
+    if (nd.type !== 'RESERVOIR' && nd.type !== 'TANK') return;
+    for (let i = 0; i < n; i++) S[i] += Math.max(0, -(nd.demand[i] || 0));
+  });
+  return S;
+}
+function pipeLeakSeries() {
+  const r = state.results, n = r.times.length, L = new Array(n).fill(0);
+  r.links.forEach(lk => {
+    if (lk.type !== 'PIPE' || !lk.leakage) return;
+    for (let i = 0; i < n; i++) L[i] += lk.leakage[i] || 0;
+  });
+  return L;
+}
+function clockToSec(hhmm) { const p = String(hhmm).split(':'); return (+p[0] || 0) * 3600 + (+p[1] || 0) * 60; }
+function inClockWindow(c, s, e) { return s <= e ? (c >= s && c < e) : (c >= s || c < e); }
+function leakCard(k, v, cls) { return `<div class="stat-card"><div class="sk">${esc(t(k))}</div><div class="sv ${cls || ''}">${esc(v)}</div></div>`; }
+function renderLeakage() {
+  const el = $('leakWrap'); if (!state.results) { el.innerHTML = ''; return; }
+  const r = state.results, u = r.units;
+  const S = supplySeries(), L = pipeLeakSeries();
+  const leakVol = integrateVol(L), supplyVol = integrateVol(S);
+  const rate = supplyVol > 0 ? leakVol / supplyVol * 100 : NaN;
+  const rateCls = isNaN(rate) ? '' : (rate > 9 ? 'cell-bad' : 'leak-ok');
+  let h = '<div class="stats-grid">'
+    + leakCard('leak.rate', isNaN(rate) ? '–' : fmt(rate) + ' %', rateCls)
+    + leakCard('leak.totalVol', fmt(leakVol) + ' m³')
+    + leakCard('leak.supplyVol', fmt(supplyVol) + ' m³')
+    + leakCard('leak.avgFlow', fmt(timeAvg(L)) + ' ' + u.flow)
+    + '</div>';
+  h += `<div class="ed-hint leak-note">${esc(t('leak.rateNote'))}</div>`;
+  // MNF night-window analysis
+  const w = state.leakWindow, ws = clockToSec(w.start), we = clockToSec(w.end);
+  const startClock = (state.net.times && state.net.times.startClock) || 0;
+  const idx = [];
+  r.times.forEach((sec, i) => { if (inClockWindow((startClock + sec) % 86400, ws, we)) idx.push(i); });
+  h += `<div class="prop-section-title">${esc(t('leak.mnfTitle'))}</div>`;
+  h += `<div class="leak-win"><label>${esc(t('leak.winStart'))}<input type="time" id="leakWinStart" value="${esc(w.start)}"></label>`
+    + `<label>${esc(t('leak.winEnd'))}<input type="time" id="leakWinEnd" value="${esc(w.end)}"></label></div>`;
+  if (!idx.length) {
+    h += `<div class="warn-item">⚠ ${esc(t('leak.noNight'))}</div>`;
+  } else {
+    let nS = 0, nD = 0, nF = 0;
+    idx.forEach(i => {
+      nS += S[i]; nF += L[i];
+      r.nodes.forEach(nd => { if (nd.type === 'JUNCTION') nD += (nd.demandFlow ? nd.demandFlow[i] : nd.demand[i]) || 0; });
+    });
+    nS /= idx.length; nD /= idx.length; nF /= idx.length;
+    h += '<div class="stats-grid">'
+      + leakCard('leak.mnfSupply', fmt(nS) + ' ' + u.flow)
+      + leakCard('leak.mnfDemand', fmt(nD) + ' ' + u.flow)
+      + leakCard('leak.mnfLeak', fmt(nS - nD) + ' ' + u.flow)
+      + leakCard('leak.mnfFavad', fmt(nF) + ' ' + u.flow)
+      + '</div>';
+    h += `<div class="ed-hint leak-note">${esc(t('leak.mnfNote'))}</div>`;
+  }
+  // per-pipe leakage ranking
+  h += `<div class="prop-section-title">${esc(t('leak.rankTitle'))}</div>`;
+  const rows = [];
+  r.links.forEach(lk => {
+    if (lk.type !== 'PIPE' || !lk.leakage) return;
+    const vol = integrateVol(lk.leakage);
+    if (vol > 0) rows.push({ id: lk.id, from: lk.from, to: lk.to, avg: timeAvg(lk.leakage), vol });
+  });
+  rows.sort((a, b) => b.vol - a.vol);
+  if (!rows.length) {
+    h += `<div class="warn-none">${esc(t('leak.noPipes'))}</div>`;
+  } else {
+    h += `<table><thead><tr><th>#</th><th>${t('th.id')}</th><th>${t('th.fromTo')}</th><th>${t('leak.avgFlow')} (${u.flow})</th><th>${t('leak.volume')} (m³)</th><th>${t('leak.share')} (%)</th></tr></thead><tbody>`;
+    rows.forEach((row, i) => {
+      const share = leakVol > 0 ? row.vol / leakVol * 100 : 0;
+      h += `<tr data-kind="link" data-id="${esc(row.id)}"><td class="num">${i + 1}</td><td>${esc(row.id)}</td><td>${esc(row.from)}→${esc(row.to)}</td><td class="num">${fmt(row.avg)}</td><td class="num">${fmt(row.vol)}</td><td class="num">${fmt(share)}</td></tr>`;
+    });
+    h += '</tbody></table>';
+  }
+  el.innerHTML = h;
+  $('leakWinStart').addEventListener('change', e => { state.leakWindow.start = e.target.value || '02:00'; renderLeakage(); });
+  $('leakWinEnd').addEventListener('change', e => { state.leakWindow.end = e.target.value || '04:00'; renderLeakage(); });
+  el.querySelectorAll('tr[data-id]').forEach(tr => tr.addEventListener('click', () => select({ kind: tr.dataset.kind, id: tr.dataset.id })));
+  highlightTableRow();
 }
 
 /* ============================ results export & chart ============================ */
@@ -1954,7 +2140,7 @@ function refreshLangUI() {
   if (!$('dataModal').hidden && dataRows) { renderDataTabs(); renderDataTree(); redrawEditors(); }
   updateAttribution();
   if (state.results) {
-    renderTables(); renderLegend(); updateTimeUI();
+    renderTables(); renderStats(); renderLeakage(); renderReport(); renderLegend(); updateTimeUI();
     $('rpSummary').textContent = t('rp.summary', state.results.nodes.length, state.results.links.length, state.results.times.length);
     redrawChartIfOpen();
   }
