@@ -63,6 +63,7 @@ const (
 	NHead         = 10
 	NPressure     = 11
 	NQuality      = 12
+	NSourceMass   = 13
 	NInitVolume   = 14
 	NMixModel     = 15
 	NTankDiam     = 17
@@ -75,6 +76,10 @@ const (
 	NMaxVolume    = 25
 	NCanOverflow  = 26
 	NDemandDeficit = 27
+	NEmitterFlow   = 29
+	NLeakageFlow   = 30
+	NDemandFlow    = 31
+	NFullDemand    = 32
 )
 
 // Link properties.
@@ -99,6 +104,7 @@ const (
 	LPumpPower  = 18
 	LLeakArea   = 26
 	LLeakExpan  = 27
+	LLinkLeakage = 28
 	LValveType  = 29
 )
 

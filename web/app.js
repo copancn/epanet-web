@@ -604,6 +604,13 @@ function tipContent(hit) {
         if (rs.level) rows.push([t('m.level'), fmt(rs.level[ti]), u.head]);
         if (rs.volume) rows.push([t('m.volume'), fmt(rs.volume[ti]), 'm³']);
         if (rs.demandDeficit && rs.demandDeficit[ti] > 0) rows.push([t('m.deficit'), fmt(rs.demandDeficit[ti]), u.flow]);
+        if (rs.emitterFlow && rs.emitterFlow[ti] !== 0) rows.push([t('m.emitterFlow'), fmt(rs.emitterFlow[ti]), u.flow]);
+        if (rs.leakageFlow && rs.leakageFlow[ti] !== 0) rows.push([t('m.leakageFlow'), fmt(rs.leakageFlow[ti]), u.flow]);
+        if (state.net.demandModel && state.net.demandModel.type === 'PDA') {
+          if (rs.demandFlow) rows.push([t('m.demandFlow'), fmt(rs.demandFlow[ti]), u.flow]);
+          if (rs.fullDemand) rows.push([t('m.fullDemand'), fmt(rs.fullDemand[ti]), u.flow]);
+        }
+        if (rs.sourceMass && rs.sourceMass[ti] !== 0) rows.push([t('m.sourceMass'), fmt(rs.sourceMass[ti]), '']);
         if (u.quality) rows.push([t('m.quality'), fmt(rs.quality[ti]), u.quality]);
       } else {
         rows.push([t('m.flow'), fmt(rs.flow[ti]), u.flow]);
@@ -613,6 +620,7 @@ function tipContent(hit) {
         if (rs.energy) rows.push([t('m.energy'), fmt(rs.energy[ti]), 'kWh']);
         if (rs.efficiency) rows.push([t('m.efficiency'), fmt(rs.efficiency[ti]), '%']);
         if (rs.setting && rs.type !== 'PUMP') rows.push([t('m.setting'), fmt(rs.setting[ti]), '']);
+        if (rs.leakage && rs.leakage[ti] !== 0) rows.push([t('m.leakage'), fmt(rs.leakage[ti]), u.flow]);
       }
     }
   } else if (hit.kind === 'node') {
@@ -974,12 +982,20 @@ function resultReadout(rs, isNode) {
     if (rs.level) rows.push([t('m.level'), rs.level[ti], u.head]);
     if (rs.volume) rows.push([t('m.volume'), rs.volume[ti], 'm³']);
     if (rs.demandDeficit) rows.push([t('m.deficit'), rs.demandDeficit[ti], u.flow]);
+    if (rs.emitterFlow && rs.emitterFlow[ti] !== 0) rows.push([t('m.emitterFlow'), rs.emitterFlow[ti], u.flow]);
+    if (rs.leakageFlow && rs.leakageFlow[ti] !== 0) rows.push([t('m.leakageFlow'), rs.leakageFlow[ti], u.flow]);
+    if (state.net.demandModel && state.net.demandModel.type === 'PDA') {
+      if (rs.demandFlow) rows.push([t('m.demandFlow'), rs.demandFlow[ti], u.flow]);
+      if (rs.fullDemand) rows.push([t('m.fullDemand'), rs.fullDemand[ti], u.flow]);
+    }
+    if (rs.sourceMass && rs.sourceMass[ti] !== 0) rows.push([t('m.sourceMass'), rs.sourceMass[ti], '']);
     if (u.quality) rows.push([t('m.quality'), rs.quality[ti], u.quality]);
   } else {
     if (rs.setting && rs.type !== 'PUMP') rows.push([t('m.setting'), rs.setting[ti], '']);
     if (rs.power) rows.push([t('m.power'), rs.power[ti], 'kW']);
     if (rs.efficiency) rows.push([t('m.efficiency'), rs.efficiency[ti], '%']);
     if (rs.energy) rows.push([t('m.energy'), rs.energy[ti], 'kWh']);
+    if (rs.leakage && rs.leakage[ti] !== 0) rows.push([t('m.leakage'), rs.leakage[ti], u.flow]);
   }
   box.innerHTML = `<div class="prop-section-title" style="margin-top:0">${esc(t('prop.currentResult'))}</div>` +
     rows.map(([k, v, un]) => `<div class="rr-row"><span>${esc(k)}</span><span>${typeof v === 'number' ? fmt(v) : esc(v)} ${un}</span></div>`).join('');
@@ -1612,10 +1628,11 @@ function metricUnit(k) {
   switch (k) {
     case 'pressure': return u.pressure;
     case 'head': case 'level': return u.head;
-    case 'demand': case 'flow': case 'demandDeficit': return u.flow;
+    case 'demand': case 'flow': case 'demandDeficit': case 'emitterFlow': case 'leakageFlow': case 'demandFlow': case 'fullDemand': case 'leakage': return u.flow;
     case 'velocity': return u.velocity;
     case 'headloss': return u.headloss;
     case 'quality': return u.quality || '';
+    case 'sourceMass': return '';
     case 'energy': return 'kWh';
     case 'efficiency': return '%';
     case 'power': return 'kW';
@@ -1641,9 +1658,18 @@ function renderTables() {
   // nodes
   const hasLevel = state.results.nodes.some(n => n.level);
   const hasDeficit = state.results.nodes.some(n => n.demandDeficit);
+  const anyNonZero = (arr, key) => arr.some(s => s[key] && s[key].some(v => v !== 0));
+  const hasEmitter = anyNonZero(state.results.nodes, 'emitterFlow');
+  const hasNodeLeak = anyNonZero(state.results.nodes, 'leakageFlow');
+  const hasSourceMass = !!u.quality && anyNonZero(state.results.nodes, 'sourceMass');
+  const isPda = state.net.demandModel && state.net.demandModel.type === 'PDA';
   let h = `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.type')}</th><th>${t('th.elev')}</th><th>${t('th.pressure')} (${u.pressure})</th><th>${t('th.head')} (${u.head})</th><th>${t('th.demand')} (${u.flow})</th>`;
   if (hasLevel) h += `<th>${t('m.level')} (${u.head})</th>`;
   if (hasDeficit) h += `<th>${t('m.deficit')} (${u.flow})</th>`;
+  if (hasEmitter) h += `<th>${t('m.emitterFlow')} (${u.flow})</th>`;
+  if (hasNodeLeak) h += `<th>${t('m.leakageFlow')} (${u.flow})</th>`;
+  if (isPda) h += `<th>${t('m.demandFlow')} (${u.flow})</th><th>${t('m.fullDemand')} (${u.flow})</th>`;
+  if (hasSourceMass) h += `<th>${t('m.sourceMass')}</th>`;
   if (u.quality) h += `<th>${t('th.quality')} (${u.quality})</th>`;
   h += `</tr></thead><tbody>`;
   state.results.nodes.forEach(n => {
@@ -1651,6 +1677,10 @@ function renderTables() {
     h += `<tr data-kind="node" data-id="${esc(n.id)}"><td>${esc(n.id)}</td><td>${n.type}</td><td class="num">${fmt(nodeById(n.id) ? nodeById(n.id).elevation : 0)}</td><td class="num ${bad ? 'cell-bad' : ''}">${fmt(p)}</td><td class="num">${fmt(n.head[ti])}</td><td class="num">${fmt(n.demand[ti])}</td>`;
     if (hasLevel) h += `<td class="num">${fmt(n.level ? n.level[ti] : NaN)}</td>`;
     if (hasDeficit) h += `<td class="num">${fmt(n.demandDeficit ? n.demandDeficit[ti] : NaN)}</td>`;
+    if (hasEmitter) h += `<td class="num">${fmt(n.emitterFlow ? n.emitterFlow[ti] : NaN)}</td>`;
+    if (hasNodeLeak) h += `<td class="num">${fmt(n.leakageFlow ? n.leakageFlow[ti] : NaN)}</td>`;
+    if (isPda) h += `<td class="num">${fmt(n.demandFlow ? n.demandFlow[ti] : NaN)}</td><td class="num">${fmt(n.fullDemand ? n.fullDemand[ti] : NaN)}</td>`;
+    if (hasSourceMass) h += `<td class="num">${fmt(n.sourceMass ? n.sourceMass[ti] : NaN)}</td>`;
     if (u.quality) h += `<td class="num">${fmt(n.quality[ti])}</td>`;
     h += `</tr>`;
   });
@@ -1659,9 +1689,11 @@ function renderTables() {
   // links
   const hasSetting = state.results.links.some(l => l.setting);
   const hasEnergy = state.results.links.some(l => l.energy);
+  const hasLeak = state.results.links.some(l => l.leakage && l.leakage.some(v => v !== 0));
   let hl = `<table><thead><tr><th>${t('th.id')}</th><th>${t('th.type')}</th><th>${t('th.fromTo')}</th><th>${t('th.flow')} (${u.flow})</th><th>${t('th.velocity')} (${u.velocity})</th><th>${t('th.headloss')} (${u.headloss})</th><th>${t('th.status')}</th>`;
   if (hasSetting) hl += `<th>${t('m.setting')}</th>`;
   if (hasEnergy) hl += `<th>${t('m.energy')} (kWh)</th>`;
+  if (hasLeak) hl += `<th>${t('m.leakage')} (${u.flow})</th>`;
   hl += `</tr></thead><tbody>`;
   state.results.links.forEach(l => {
     const st = l.status[ti] > 0.5 ? t('status.open') : t('status.closed');
@@ -1669,6 +1701,7 @@ function renderTables() {
     hl += `<tr data-kind="link" data-id="${esc(l.id)}"><td>${esc(l.id)}</td><td>${l.type}</td><td>${esc(l.from)}→${esc(l.to)}</td><td class="num">${fmt(l.flow[ti])}</td><td class="num ${vwarn}">${fmt(l.velocity[ti])}</td><td class="num">${fmt(l.headloss[ti])}</td><td>${st}</td>`;
     if (hasSetting) hl += `<td class="num">${fmt(l.setting ? l.setting[ti] : NaN)}</td>`;
     if (hasEnergy) hl += `<td class="num">${fmt(l.energy ? l.energy[ti] : NaN)}</td>`;
+    if (hasLeak) hl += `<td class="num">${fmt(l.leakage ? l.leakage[ti] : NaN)}</td>`;
     hl += `</tr>`;
   });
   hl += `</tbody></table>`;
@@ -1734,17 +1767,22 @@ function exportCsv() {
   const u = state.results.units, times = state.results.times;
   const rows = [['kind', 'id', 'type', 'time_s',
     'pressure_' + u.pressure, 'head_' + u.head, 'demand_' + u.flow, 'quality' + (u.quality ? '_' + u.quality : ''),
-    'flow_' + u.flow, 'velocity_' + u.velocity, 'headloss_' + u.headloss, 'status'].join(',')];
+    'flow_' + u.flow, 'velocity_' + u.velocity, 'headloss_' + u.headloss, 'status',
+    'emitterFlow_' + u.flow, 'leakageFlow_' + u.flow, 'demandFlow_' + u.flow, 'fullDemand_' + u.flow, 'sourceMass', 'leakage_' + u.flow].join(',')];
   const num = v => (typeof v === 'number' && isFinite(v)) ? v : '';
   state.results.nodes.forEach(n => times.forEach((sec, i) => {
     rows.push(['node', csvCell(n.id), n.type, sec,
       num(n.pressure[i]), num(n.head[i]), num(n.demand[i]), num(n.quality ? n.quality[i] : ''),
-      '', '', '', ''].join(','));
+      '', '', '', '',
+      num(n.emitterFlow ? n.emitterFlow[i] : ''), num(n.leakageFlow ? n.leakageFlow[i] : ''),
+      num(n.demandFlow ? n.demandFlow[i] : ''), num(n.fullDemand ? n.fullDemand[i] : ''),
+      num(n.sourceMass ? n.sourceMass[i] : ''), ''].join(','));
   }));
   state.results.links.forEach(l => times.forEach((sec, i) => {
     rows.push(['link', csvCell(l.id), l.type, sec,
       '', '', '', '',
-      num(l.flow[i]), num(l.velocity[i]), num(l.headloss[i]), num(l.status[i])].join(','));
+      num(l.flow[i]), num(l.velocity[i]), num(l.headloss[i]), num(l.status[i]),
+      '', '', '', '', '', num(l.leakage ? l.leakage[i] : '')].join(','));
   }));
   download(rows.join('\r\n'), 'epanet-results.csv', 'text/csv;charset=utf-8');
 }

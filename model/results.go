@@ -54,6 +54,11 @@ type NodeSeries struct {
 	Level         []float64 `json:"level,omitempty"`         // tanks
 	Volume        []float64 `json:"volume,omitempty"`        // tanks
 	DemandDeficit []float64 `json:"demandDeficit,omitempty"` // PDA junctions
+	EmitterFlow   []float64 `json:"emitterFlow,omitempty"`   // junctions
+	LeakageFlow   []float64 `json:"leakageFlow,omitempty"`   // junctions
+	DemandFlow    []float64 `json:"demandFlow,omitempty"`    // junctions: delivered demand
+	FullDemand    []float64 `json:"fullDemand,omitempty"`    // junctions: requested demand
+	SourceMass    []float64 `json:"sourceMass,omitempty"`    // quality source mass inflow
 }
 
 // LinkSeries holds per-period computed values for one link.
@@ -73,6 +78,7 @@ type LinkSeries struct {
 	Energy     []float64 `json:"energy,omitempty"`     // pumps (kWh)
 	Efficiency []float64 `json:"efficiency,omitempty"` // pumps (%)
 	Power      []float64 `json:"power,omitempty"`      // pumps (kW)
+	Leakage    []float64 `json:"leakage,omitempty"`    // pipes (FAVAD)
 }
 
 // UnitsFor maps an EPANET flow-unit code to display labels.

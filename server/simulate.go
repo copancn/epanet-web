@@ -241,6 +241,18 @@ func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int
 			case "JUNCTION":
 				dd, _ := epanet.NodeValue(nd.Index, epanet.NDemandDeficit)
 				nd.DemandDeficit = append(nd.DemandDeficit, sanitize(dd))
+				ef, _ := epanet.NodeValue(nd.Index, epanet.NEmitterFlow)
+				nd.EmitterFlow = append(nd.EmitterFlow, sanitize(ef))
+				lf, _ := epanet.NodeValue(nd.Index, epanet.NLeakageFlow)
+				nd.LeakageFlow = append(nd.LeakageFlow, sanitize(lf))
+				df, _ := epanet.NodeValue(nd.Index, epanet.NDemandFlow)
+				nd.DemandFlow = append(nd.DemandFlow, sanitize(df))
+				fd, _ := epanet.NodeValue(nd.Index, epanet.NFullDemand)
+				nd.FullDemand = append(nd.FullDemand, sanitize(fd))
+			}
+			if qualityOn {
+				sm, _ := epanet.NodeValue(nd.Index, epanet.NSourceMass)
+				nd.SourceMass = append(nd.SourceMass, sanitize(sm))
 			}
 		}
 		for i := range links {
@@ -273,6 +285,9 @@ func readSeries(nodes []model.NodeSeries, links []model.LinkSeries, times *[]int
 			case isValveType(lk.Type):
 				se, _ := epanet.LinkValue(lk.Index, epanet.LSetting)
 				lk.Setting = append(lk.Setting, se)
+			case lk.Type == "PIPE":
+				lg, _ := epanet.LinkValue(lk.Index, epanet.LLinkLeakage)
+				lk.Leakage = append(lk.Leakage, sanitize(lg))
 			}
 		}
 		if qActive {
